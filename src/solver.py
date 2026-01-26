@@ -4,7 +4,7 @@ from src.config import *
 
 @ti.data_oriented
 class FluidSolver:
-    def __init__(self, res_x=GRID_RES[0], res_y=GRID_RES[1], res_z=GRID_RES[2]):
+    def __init__(self, res_x=GRID_RES[0], res_y=GRID_RES[1], res_z=GRID_RES[2], num_particles=DEFAULT_NUM_PARTICLES):
         self.res = (res_x, res_y, res_z)
         self.dx = 1.0
         self.dt = DT
@@ -44,7 +44,7 @@ class FluidSolver:
         self.divergence = ti.field(dtype=float, shape=self.res)
         
         # Visualization particles
-        self.num_particles = 100000
+        self.num_particles = num_particles
         self.particle_pos = ti.Vector.field(3, dtype=float, shape=self.num_particles)
         self.particle_vel = ti.Vector.field(3, dtype=float, shape=self.num_particles)
         self.particle_color = ti.Vector.field(3, dtype=float, shape=self.num_particles)

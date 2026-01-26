@@ -1,6 +1,7 @@
 import taichi as ti
 import numpy as np
 from src.config import *
+from src.config import DEFAULT_NUM_PARTICLES, MIN_NUM_PARTICLES, MAX_NUM_PARTICLES
 from src.solver import FluidSolver
 
 # Initialize Taichi
@@ -102,8 +103,10 @@ def main():
     # Defaults
     inlet_flow = 500.0 # L/min
     outlet_flow = 500.0
+    current_num_particles = DEFAULT_NUM_PARTICLES
+    target_num_particles = float(DEFAULT_NUM_PARTICLES)
     
-    solver = FluidSolver(res_x, res_y, res_z)
+    solver = FluidSolver(res_x, res_y, res_z, current_num_particles)
     update_box_geometry(res_x, res_y, res_z)
     update_pipe_geometry(
         inlet_y_mm/SCALE, outlet_y_mm/SCALE, 
@@ -207,7 +210,7 @@ def main():
         
         if window.GUI.button("Apply New Dimensions"):
             res_x, res_y, res_z = int(tank_width/SCALE), int(tank_height/SCALE), int(tank_depth/SCALE)
-            solver = FluidSolver(res_x, res_y, res_z)
+            solver = FluidSolver(res_x, res_y, res_z, current_num_particles)
             update_box_geometry(res_x, res_y, res_z)
             
             # Reset Camera
@@ -259,7 +262,20 @@ def main():
         )
             
         window.GUI.text("")
-        window.GUI.text(f"Particles: {solver.num_particles}") # Debug: Show count
+        window.GUI.text("=== Particles ===")
+        target_num_particles = window.GUI.slider_float("Particle Count", target_num_particles, float(MIN_NUM_PARTICLES), float(MAX_NUM_PARTICLES))
+        window.GUI.text(f"Current: {solver.num_particles:,}")
+        if window.GUI.button("Apply Particle Count"):
+            new_count = int(target_num_particles)
+            if new_count != current_num_particles:
+                current_num_particles = new_count
+                solver = FluidSolver(res_x, res_y, res_z, current_num_particles)
+                solver.update_params(
+                    inlet_y_mm/SCALE, outlet_y_mm/SCALE,
+                    inlet_radius_mm/SCALE, outlet_radius_mm/SCALE,
+                    inlet_z_mm/SCALE, outlet_z_mm/SCALE,
+                    inlet_flow, outlet_flow
+                )
         if window.GUI.button("Reset Particles"):
             solver.init_particles()
             
