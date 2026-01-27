@@ -42,6 +42,27 @@ class AppState:
         self.particle_size = 0.5
         self.show_trails = False
         self.show_tank_walls = True
+        
+        # シミュレーション制御 (5, 6)
+        self.is_paused = False
+        self.sim_speed = 1.0  # 0.25, 0.5, 1.0, 2.0, 4.0
+        
+        # 追加ポート (7) - 2番目のInlet/Outlet
+        self.use_second_inlet = False
+        self.inlet2_y_mm = 200.0
+        self.inlet2_z_mm = 300.0
+        self.inlet2_radius_mm = 40.0
+        self.inlet2_flow = 300.0
+        
+        self.use_second_outlet = False
+        self.outlet2_y_mm = 300.0
+        self.outlet2_z_mm = 700.0
+        self.outlet2_radius_mm = 40.0
+        self.outlet2_flow = 300.0
+        
+        # 障害物 (8)
+        self.obstacles = []  # リスト of {type, x, y, z, size}
+        self.show_obstacles = True
 
 state = AppState()
 
@@ -350,11 +371,152 @@ def setup_dpg_ui():
                 indent=10
             )
             dpg.add_spacer(height=10)
+        
+        dpg.add_separator()
+        
+        # シミュレーション制御セクション (5, 6)
+        with dpg.collapsing_header(label="シミュレーション制御", default_open=True):
+            dpg.add_spacer(height=5)
+            
+            # 一時停止/再生ボタン
+            with dpg.group(horizontal=True):
+                dpg.add_button(
+                    label="⏸ 一時停止",
+                    tag="pause_button",
+                    callback=lambda: toggle_pause(),
+                    width=100
+                )
+                dpg.add_spacer(width=10)
+                dpg.add_text("再生中", tag="pause_status_text")
+            
+            dpg.add_spacer(height=5)
+            
+            # シミュレーション速度
+            dpg.add_text("シミュレーション速度", indent=10)
+            dpg.add_radio_button(
+                items=["0.25x", "0.5x", "1x", "2x", "4x"],
+                tag="speed_radio",
+                default_value="1x",
+                horizontal=True,
+                callback=lambda s, a: setattr(state, 'sim_speed', {"0.25x": 0.25, "0.5x": 0.5, "1x": 1.0, "2x": 2.0, "4x": 4.0}[a]),
+                indent=10
+            )
+            dpg.add_spacer(height=10)
+        
+        dpg.add_separator()
+        
+        # 追加ポートセクション (7)
+        with dpg.collapsing_header(label="追加ポート", default_open=False):
+            dpg.add_spacer(height=5)
+            
+            # 2番目のInlet
+            dpg.add_checkbox(
+                label="2番目の流入口を有効化",
+                tag="use_inlet2_checkbox",
+                default_value=False,
+                callback=lambda s, a: setattr(state, 'use_second_inlet', a),
+                indent=10
+            )
+            with dpg.group(tag="inlet2_group"):
+                create_labeled_slider_with_input("Inlet2 Y (mm)", "inlet2_y", state.inlet2_y_mm, 20.0, 450.0)
+                create_labeled_slider_with_input("Inlet2 Z (mm)", "inlet2_z", state.inlet2_z_mm, 20.0, 980.0)
+                create_labeled_slider_with_input("Inlet2 半径", "inlet2_radius", state.inlet2_radius_mm, 20.0, 100.0)
+                create_labeled_slider_with_input("Inlet2 流量", "inlet2_flow", state.inlet2_flow, 0.0, 1000.0)
+            
+            dpg.add_spacer(height=10)
+            
+            # 2番目のOutlet
+            dpg.add_checkbox(
+                label="2番目の流出口を有効化",
+                tag="use_outlet2_checkbox",
+                default_value=False,
+                callback=lambda s, a: setattr(state, 'use_second_outlet', a),
+                indent=10
+            )
+            with dpg.group(tag="outlet2_group"):
+                create_labeled_slider_with_input("Outlet2 Y (mm)", "outlet2_y", state.outlet2_y_mm, 20.0, 450.0)
+                create_labeled_slider_with_input("Outlet2 Z (mm)", "outlet2_z", state.outlet2_z_mm, 20.0, 980.0)
+                create_labeled_slider_with_input("Outlet2 半径", "outlet2_radius", state.outlet2_radius_mm, 20.0, 100.0)
+                create_labeled_slider_with_input("Outlet2 流量", "outlet2_flow", state.outlet2_flow, 0.0, 1000.0)
+            
+            dpg.add_spacer(height=10)
+        
+        dpg.add_separator()
+        
+        # 障害物セクション (8)
+        with dpg.collapsing_header(label="障害物", default_open=False):
+            dpg.add_spacer(height=5)
+            
+            dpg.add_text("障害物を追加:", indent=10)
+            with dpg.group(horizontal=True):
+                dpg.add_combo(
+                    items=["球", "箱"],
+                    tag="obstacle_type_combo",
+                    default_value="球",
+                    width=80
+                )
+                dpg.add_spacer(width=10)
+                dpg.add_button(label="追加", callback=lambda: add_obstacle(), width=60)
+                dpg.add_button(label="全削除", callback=lambda: clear_obstacles(), width=60)
+            
+            dpg.add_spacer(height=5)
+            
+            # 障害物パラメータ
+            create_labeled_slider_with_input("X位置 (mm)", "obs_x", 500.0, 0.0, 1000.0)
+            create_labeled_slider_with_input("Y位置 (mm)", "obs_y", 250.0, 0.0, 500.0)
+            create_labeled_slider_with_input("Z位置 (mm)", "obs_z", 500.0, 0.0, 1000.0)
+            create_labeled_slider_with_input("サイズ (mm)", "obs_size", 50.0, 20.0, 200.0)
+            
+            dpg.add_spacer(height=5)
+            dpg.add_text("配置済み障害物: 0個", tag="obstacle_count_text", indent=10)
+            dpg.add_checkbox(
+                label="障害物を表示",
+                tag="show_obstacles_checkbox",
+                default_value=True,
+                callback=lambda s, a: setattr(state, 'show_obstacles', a),
+                indent=10
+            )
+            dpg.add_spacer(height=10)
     
-    dpg.create_viewport(title='Fluid Simulation - Control Panel', width=440, height=850, x_pos=50, y_pos=50)
+    dpg.create_viewport(title='Fluid Simulation - Control Panel', width=460, height=950, x_pos=50, y_pos=20)
     dpg.setup_dearpygui()
     dpg.show_viewport()
     dpg.set_primary_window("main_window", True)
+
+
+def toggle_pause():
+    """一時停止/再生を切り替え"""
+    state.is_paused = not state.is_paused
+    if state.is_paused:
+        dpg.set_item_label("pause_button", "▶ 再生")
+        dpg.set_value("pause_status_text", "一時停止中")
+    else:
+        dpg.set_item_label("pause_button", "⏸ 一時停止")
+        dpg.set_value("pause_status_text", "再生中")
+
+
+def add_obstacle():
+    """障害物を追加"""
+    obs_type = dpg.get_value("obstacle_type_combo")
+    x = dpg.get_value("obs_x_slider")
+    y = dpg.get_value("obs_y_slider")
+    z = dpg.get_value("obs_z_slider")
+    size = dpg.get_value("obs_size_slider")
+    
+    state.obstacles.append({
+        'type': 'sphere' if obs_type == "球" else 'box',
+        'x': x,
+        'y': y,
+        'z': z,
+        'size': size
+    })
+    dpg.set_value("obstacle_count_text", f"配置済み障害物: {len(state.obstacles)}個")
+
+
+def clear_obstacles():
+    """全障害物を削除"""
+    state.obstacles.clear()
+    dpg.set_value("obstacle_count_text", f"配置済み障害物: 0個")
 
 
 def main():
@@ -445,7 +607,23 @@ def main():
         # カラーマップ更新
         solver.colormap_mode[None] = state.colormap_mode
         
-        solver.step()
+        # 障害物データをソルバーに渡す
+        solver.num_obstacles[None] = min(len(state.obstacles), solver.max_obstacles)
+        for i, obs in enumerate(state.obstacles[:solver.max_obstacles]):
+            solver.obstacle_data[i] = [
+                obs['x'] / SCALE,
+                obs['y'] / SCALE,
+                obs['z'] / SCALE,
+                obs['size'] / SCALE,
+                0.0 if obs['type'] == 'sphere' else 1.0
+            ]
+        
+        # シミュレーション実行（一時停止と速度制御）
+        if not state.is_paused:
+            # 速度に応じてステップ数を調整
+            steps_per_frame = max(1, int(state.sim_speed))
+            for _ in range(steps_per_frame):
+                solver.step()
         
         # Camera Control
         curr_mouse_pos = np.array(window.get_cursor_pos())
@@ -502,6 +680,26 @@ def main():
         
         # パイプ描画
         scene.lines(pipe_v_field, indices=pipe_i_field, color=(0.8, 0.8, 0.8), width=2.0, vertex_count=num_pipe_indices[None])
+        
+        # 障害物描画
+        if state.show_obstacles and len(state.obstacles) > 0:
+            for obs in state.obstacles:
+                # グリッド座標に変換
+                ox = obs['x'] / SCALE
+                oy = obs['y'] / SCALE
+                oz = obs['z'] / SCALE
+                osize = obs['size'] / SCALE
+                
+                if obs['type'] == 'sphere':
+                    # 球の簡易描画（パーティクルとして表示）
+                    sphere_center = np.array([[ox, oy, oz]], dtype=np.float32)
+                    sphere_field = ti.Vector.field(3, dtype=float, shape=1)
+                    sphere_field.from_numpy(sphere_center)
+                    scene.particles(sphere_field, radius=osize, color=(0.8, 0.4, 0.1))
+                else:
+                    # 箱の簡易描画（ワイヤーフレーム）
+                    # TODO: 箱のワイヤーフレーム描画
+                    pass
         
         # トレイル描画
         if state.show_trails:

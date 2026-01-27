@@ -59,6 +59,13 @@ class FluidSolver:
         self.trail_length = 20
         self.trail_positions = ti.Vector.field(3, dtype=float, shape=(self.num_particles, self.trail_length))
         self.trail_index = ti.field(dtype=int, shape=self.num_particles)
+        
+        # 障害物 (最大10個)
+        self.max_obstacles = 10
+        self.num_obstacles = ti.field(dtype=int, shape=())
+        self.num_obstacles[None] = 0
+        # obstacle_data: [x, y, z, size, type(0=sphere, 1=box)]
+        self.obstacle_data = ti.Vector.field(5, dtype=float, shape=self.max_obstacles)
 
         self.init_particles()
         
@@ -438,6 +445,53 @@ class FluidSolver:
                     vel[2] *= -0.8 # Bounce
                     vel[0] += (ti.random() - 0.5) * kick
                     vel[1] += (ti.random() - 0.5) * kick
+                
+                # --- 障害物との衝突判定 ---
+                for obs_idx in range(self.num_obstacles[None]):
+                    obs = self.obstacle_data[obs_idx]
+                    ox, oy, oz, osize, otype = obs[0], obs[1], obs[2], obs[3], obs[4]
+                    
+                    if otype < 0.5:  # Sphere
+                        # 球の中心からの距離を計算
+                        to_obs = p_next - ti.Vector([ox, oy, oz])
+                        dist = to_obs.norm()
+                        
+                        if dist < osize and dist > 0.01:
+                            # 球の表面に押し出す
+                            normal = to_obs / dist
+                            p_next = ti.Vector([ox, oy, oz]) + normal * (osize + 0.5)
+                            # 反射
+                            vel_normal = vel.dot(normal)
+                            vel = vel - 2.0 * vel_normal * normal * 0.5
+                    else:  # Box
+                        # 箱との衝突判定
+                        half = osize * 0.5
+                        if (abs(p_next[0] - ox) < half and 
+                            abs(p_next[1] - oy) < half and 
+                            abs(p_next[2] - oz) < half):
+                            # 最も近い面を見つけて押し出す
+                            dx = abs(p_next[0] - ox)
+                            dy = abs(p_next[1] - oy)
+                            dz = abs(p_next[2] - oz)
+                            
+                            if dx >= dy and dx >= dz:
+                                if p_next[0] > ox:
+                                    p_next[0] = ox + half + 0.5
+                                else:
+                                    p_next[0] = ox - half - 0.5
+                                vel[0] *= -0.5
+                            elif dy >= dx and dy >= dz:
+                                if p_next[1] > oy:
+                                    p_next[1] = oy + half + 0.5
+                                else:
+                                    p_next[1] = oy - half - 0.5
+                                vel[1] *= -0.5
+                            else:
+                                if p_next[2] > oz:
+                                    p_next[2] = oz + half + 0.5
+                                else:
+                                    p_next[2] = oz - half - 0.5
+                                vel[2] *= -0.5
 
             else:
                 # --- Inside the Pipe Region (X < 0) ---
