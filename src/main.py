@@ -82,6 +82,9 @@ class AppState:
         self.is_recording = False
         self.recording_frames = []
         self.frame_count = 0
+        
+        # シミュレーション経過時間
+        self.sim_elapsed_time = 0.0  # 秒
 
 state = AppState()
 
@@ -420,6 +423,11 @@ def setup_dpg_ui():
                 callback=lambda s, a: setattr(state, 'sim_speed', {"0.25x": 0.25, "0.5x": 0.5, "1x": 1.0, "2x": 2.0, "4x": 4.0}[a]),
                 indent=10
             )
+            
+            dpg.add_spacer(height=5)
+            
+            # 経過時間表示
+            dpg.add_text("経過時間: 0.0 秒", tag="elapsed_time_text", indent=10)
             dpg.add_spacer(height=10)
         
         dpg.add_separator()
@@ -747,6 +755,7 @@ def main():
         # 粒子リセットチェック
         if state.needs_particle_reset:
             solver.init_particles()
+            state.sim_elapsed_time = 0.0  # 経過時間もリセット
             state.needs_particle_reset = False
         
         # 粒子数更新チェック
@@ -796,6 +805,19 @@ def main():
             steps_per_frame = max(1, int(state.sim_speed))
             for _ in range(steps_per_frame):
                 solver.step()
+            # 経過時間を更新（1フレーム = 約1/60秒として概算）
+            state.sim_elapsed_time += (1.0 / 60.0) * state.sim_speed
+        
+        # 経過時間表示更新
+        try:
+            minutes = int(state.sim_elapsed_time // 60)
+            seconds = state.sim_elapsed_time % 60
+            if minutes > 0:
+                dpg.set_value("elapsed_time_text", f"経過時間: {minutes}分 {seconds:.1f}秒")
+            else:
+                dpg.set_value("elapsed_time_text", f"経過時間: {seconds:.1f} 秒")
+        except:
+            pass
         
         # 流量計更新（10フレームごと）
         flow_update_counter += 1
@@ -949,12 +971,18 @@ def main():
                     [0, 0, pos]
                 ], dtype=np.float32)
             
-            section_field = ti.Vector.field(3, dtype=float, shape=5)
-            section_field.from_numpy(section_verts)
+            section_field = ti.Vector.field(3, dtype=float, shape=4)
+            section_field.from_numpy(section_verts[:4])
             section_indices = ti.field(dtype=int, shape=8)
-            for i in range(4):
-                section_indices[2*i] = i
-                section_indices[2*i+1] = i + 1
+            # 閉じた矩形: 0-1, 1-2, 2-3, 3-0
+            section_indices[0] = 0
+            section_indices[1] = 1
+            section_indices[2] = 1
+            section_indices[3] = 2
+            section_indices[4] = 2
+            section_indices[5] = 3
+            section_indices[6] = 3
+            section_indices[7] = 0
             scene.lines(section_field, indices=section_indices, color=(1.0, 1.0, 0.0), width=3.0)
         
         canvas.scene(scene)
