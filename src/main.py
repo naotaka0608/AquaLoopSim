@@ -2,6 +2,7 @@ import taichi as ti
 import numpy as np
 import dearpygui.dearpygui as dpg
 import os
+import json
 import datetime
 from src.config import *
 from src.config import DEFAULT_NUM_PARTICLES, MIN_NUM_PARTICLES, MAX_NUM_PARTICLES
@@ -85,8 +86,77 @@ class AppState:
         
         # シミュレーション経過時間
         self.sim_elapsed_time = 0.0  # 秒
+    
+    def to_dict(self):
+        """保存用の辞書に変換"""
+        return {
+            'tank_width': self.tank_width,
+            'tank_height': self.tank_height,
+            'tank_depth': self.tank_depth,
+            'inlet_y_mm': self.inlet_y_mm,
+            'inlet_z_mm': self.inlet_z_mm,
+            'inlet_radius_mm': self.inlet_radius_mm,
+            'outlet_y_mm': self.outlet_y_mm,
+            'outlet_z_mm': self.outlet_z_mm,
+            'outlet_radius_mm': self.outlet_radius_mm,
+            'inlet_flow': self.inlet_flow,
+            'outlet_flow': self.outlet_flow,
+            'is_sync': self.is_sync,
+            'target_num_particles': self.target_num_particles,
+            'colormap_mode': self.colormap_mode,
+            'particle_size': self.particle_size,
+            'show_tank_walls': self.show_tank_walls,
+            'sim_speed': self.sim_speed,
+            'use_second_inlet': self.use_second_inlet,
+            'inlet2_y_mm': self.inlet2_y_mm,
+            'inlet2_z_mm': self.inlet2_z_mm,
+            'inlet2_radius_mm': self.inlet2_radius_mm,
+            'inlet2_flow': self.inlet2_flow,
+            'use_second_outlet': self.use_second_outlet,
+            'outlet2_y_mm': self.outlet2_y_mm,
+            'outlet2_z_mm': self.outlet2_z_mm,
+            'outlet2_radius_mm': self.outlet2_radius_mm,
+            'outlet2_flow': self.outlet2_flow,
+            'obstacles': self.obstacles,
+        }
+    
+    def from_dict(self, data):
+        """辞書からパラメータを読み込み"""
+        for key, value in data.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+
+# 設定ファイルパス
+CONFIG_FILE = "./config.json"
+
+def save_config():
+    """パラメータをJSONに保存"""
+    try:
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(state.to_dict(), f, ensure_ascii=False, indent=2)
+        print(f"設定を保存しました: {CONFIG_FILE}")
+        return True
+    except Exception as e:
+        print(f"設定の保存に失敗: {e}")
+        return False
+
+def load_config():
+    """JSONからパラメータを読み込み"""
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            state.from_dict(data)
+            print(f"設定を読み込みました: {CONFIG_FILE}")
+            return True
+    except Exception as e:
+        print(f"設定の読み込みに失敗: {e}")
+    return False
 
 state = AppState()
+
+# 起動時に設定を読み込み
+load_config()
 
 # Resolution Scale
 SCALE = 10.0 
@@ -203,6 +273,40 @@ def on_reset_particles():
 def on_apply_particles():
     state.needs_particle_count_update = True
 
+def on_save_config():
+    """設定保存ボタンのコールバック"""
+    update_state_from_ui()  # UIから最新の値を取得
+    if save_config():
+        dpg.set_value("config_status_text", "✓ 設定を保存しました")
+    else:
+        dpg.set_value("config_status_text", "✗ 保存に失敗しました")
+
+def on_load_config():
+    """設定読み込みボタンのコールバック"""
+    if load_config():
+        # UIを更新
+        try:
+            dpg.set_value("tank_width_slider", state.tank_width)
+            dpg.set_value("tank_height_slider", state.tank_height)
+            dpg.set_value("tank_depth_slider", state.tank_depth)
+            dpg.set_value("inlet_y_slider", state.inlet_y_mm)
+            dpg.set_value("inlet_z_slider", state.inlet_z_mm)
+            dpg.set_value("inlet_radius_slider", state.inlet_radius_mm)
+            dpg.set_value("inlet_flow_slider", state.inlet_flow)
+            dpg.set_value("outlet_y_slider", state.outlet_y_mm)
+            dpg.set_value("outlet_z_slider", state.outlet_z_mm)
+            dpg.set_value("outlet_radius_slider", state.outlet_radius_mm)
+            dpg.set_value("outlet_flow_slider", state.outlet_flow)
+            dpg.set_value("sync_checkbox", state.is_sync)
+            dpg.set_value("particle_slider", state.target_num_particles)
+            dpg.set_value("particle_size_slider", state.particle_size)
+            dpg.set_value("show_tank_checkbox", state.show_tank_walls)
+            dpg.set_value("config_status_text", "✓ 設定を読み込みました")
+        except Exception as e:
+            print(f"UI更新エラー: {e}")
+    else:
+        dpg.set_value("config_status_text", "✗ 読み込みに失敗しました")
+
 def create_labeled_slider_with_input(label, tag_base, default_val, min_val, max_val, format_str="%.1f"):
     """ラベル + スライダー + インプットボックスのセットを作成"""
     slider_tag = f"{tag_base}_slider"
@@ -268,6 +372,23 @@ def setup_dpg_ui():
     
     # メインウィンドウ
     with dpg.window(label="コントロールパネル", tag="main_window", width=400, height=680, no_close=True):
+        
+        # 設定保存/読み込みセクション
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label="💾 設定を保存",
+                callback=lambda: on_save_config(),
+                width=130
+            )
+            dpg.add_spacer(width=10)
+            dpg.add_button(
+                label="📂 設定を読み込み",
+                callback=lambda: on_load_config(),
+                width=130
+            )
+        dpg.add_text("", tag="config_status_text")
+        dpg.add_spacer(height=5)
+        dpg.add_separator()
         
         # タンク寸法セクション
         with dpg.collapsing_header(label="タンク寸法", default_open=True):
