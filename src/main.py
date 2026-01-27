@@ -312,15 +312,14 @@ def create_labeled_slider_with_input(label, tag_base, default_val, min_val, max_
     slider_tag = f"{tag_base}_slider"
     input_tag = f"{tag_base}_input"
     
+    dpg.add_text(label)
     with dpg.group(horizontal=True):
-        dpg.add_text(label, indent=10)
-        dpg.add_spacer(width=10)
         dpg.add_slider_float(
             tag=slider_tag,
             default_value=default_val,
             min_value=min_val,
             max_value=max_val,
-            width=180,
+            width=280,
             format=format_str,
             callback=sync_slider_to_input,
             user_data=input_tag
@@ -328,375 +327,353 @@ def create_labeled_slider_with_input(label, tag_base, default_val, min_val, max_
         dpg.add_input_float(
             tag=input_tag,
             default_value=default_val,
-            width=70,
+            width=90,
             step=0,
             callback=sync_input_to_slider,
             user_data=slider_tag
         )
+    dpg.add_spacer(height=3)
+
+def _create_config_section():
+    """設定保存/読み込みセクション"""
+    with dpg.group(horizontal=True):
+        dpg.add_button(label="Save Config", callback=lambda: on_save_config(), width=150)
+        dpg.add_spacer(width=10)
+        dpg.add_button(label="Load Config", callback=lambda: on_load_config(), width=150)
+    dpg.add_text("", tag="config_status_text")
+    dpg.add_spacer(height=5)
+    dpg.add_separator()
+
+
+def _create_tank_section():
+    """タンク寸法セクション"""
+    with dpg.collapsing_header(label="タンク寸法", default_open=True):
+        dpg.add_spacer(height=5)
+        create_labeled_slider_with_input("幅 (mm)", "tank_width", state.tank_width, 500.0, 2000.0)
+        create_labeled_slider_with_input("高さ (mm)", "tank_height", state.tank_height, 200.0, 1000.0)
+        create_labeled_slider_with_input("奥行 (mm)", "tank_depth", state.tank_depth, 500.0, 2000.0)
+        dpg.add_spacer(height=5)
+        dpg.add_button(label="寸法を適用", callback=on_apply_dimensions, width=150)
+        dpg.add_spacer(height=10)
+    dpg.add_separator()
+
+
+def _create_inlet_section():
+    """流入口セクション"""
+    with dpg.collapsing_header(label="流入口 (Inlet)", default_open=True):
+        dpg.add_spacer(height=5)
+        create_labeled_slider_with_input("Y位置 (mm)", "inlet_y", state.inlet_y_mm, 20.0, 450.0)
+        create_labeled_slider_with_input("Z位置 (mm)", "inlet_z", state.inlet_z_mm, 20.0, 980.0)
+        create_labeled_slider_with_input("半径 (mm)", "inlet_radius", state.inlet_radius_mm, 20.0, 150.0)
+        create_labeled_slider_with_input("流量 (L/min)", "inlet_flow", state.inlet_flow, 0.0, 2000.0)
+        dpg.add_spacer(height=10)
+    dpg.add_separator()
+
+
+def _create_outlet_section():
+    """流出口セクション"""
+    with dpg.collapsing_header(label="流出口 (Outlet)", default_open=True):
+        dpg.add_spacer(height=5)
+        dpg.add_checkbox(label="流入口と同期", tag="sync_checkbox", default_value=state.is_sync, callback=lambda: update_state_from_ui())
+        dpg.add_spacer(height=5)
+        create_labeled_slider_with_input("Y位置 (mm)", "outlet_y", state.outlet_y_mm, 20.0, 450.0)
+        create_labeled_slider_with_input("Z位置 (mm)", "outlet_z", state.outlet_z_mm, 20.0, 980.0)
+        create_labeled_slider_with_input("半径 (mm)", "outlet_radius", state.outlet_radius_mm, 20.0, 150.0)
+        create_labeled_slider_with_input("流量 (L/min)", "outlet_flow", state.outlet_flow, 0.0, 2000.0)
+        dpg.add_spacer(height=10)
+    dpg.add_separator()
+
+
+def _create_particle_section():
+    """粒子設定セクション"""
+    with dpg.collapsing_header(label="粒子設定", default_open=True):
+        dpg.add_spacer(height=5)
+        with dpg.group(horizontal=True):
+            dpg.add_text("粒子数", indent=10)
+            dpg.add_spacer(width=10)
+            dpg.add_slider_int(
+                tag="particle_slider",
+                default_value=state.current_num_particles,
+                min_value=MIN_NUM_PARTICLES,
+                max_value=MAX_NUM_PARTICLES,
+                width=180,
+                callback=lambda: update_state_from_ui()
+            )
+            dpg.add_input_int(
+                tag="particle_input",
+                default_value=state.current_num_particles,
+                width=70,
+                step=0,
+                callback=lambda s, a: dpg.set_value("particle_slider", a)
+            )
+        dpg.add_text(f"現在: {state.current_num_particles:,}", tag="particle_count_text", indent=10)
+        dpg.add_spacer(height=5)
+        with dpg.group(horizontal=True):
+            dpg.add_button(label="粒子数を適用", callback=on_apply_particles, width=120)
+            dpg.add_spacer(width=10)
+            dpg.add_button(label="リセット", callback=on_reset_particles, width=80)
+        dpg.add_spacer(height=10)
+    dpg.add_separator()
+    dpg.add_spacer(height=10)
+
+
+def _create_controls_section():
+    """操作説明セクション"""
+    with dpg.collapsing_header(label="操作方法", default_open=False):
+        dpg.add_text("右クリック+ドラッグ: 視点回転", indent=10)
+        dpg.add_text("Shift+右クリック: ズーム", indent=10)
+        dpg.add_text("中クリック+ドラッグ: パン", indent=10)
+    dpg.add_separator()
+
+
+def _create_visualization_section():
+    """視覚化設定セクション"""
+    with dpg.collapsing_header(label="視覚化設定", default_open=True):
+        dpg.add_spacer(height=5)
+        # カラーマップ選択
+        dpg.add_text("カラーマップ", indent=10)
+        dpg.add_radio_button(
+            items=["青→赤", "レインボー", "クールウォーム", "Viridis"],
+            tag="colormap_radio",
+            default_value="青→赤",
+            horizontal=True,
+            callback=lambda s, a: setattr(state, 'colormap_mode', ["青→赤", "レインボー", "クールウォーム", "Viridis"].index(a)),
+            indent=10
+        )
+        dpg.add_spacer(height=5)
+        # 粒子サイズ
+        with dpg.group(horizontal=True):
+            dpg.add_text("粒子サイズ", indent=10)
+            dpg.add_slider_float(
+                tag="particle_size_slider",
+                default_value=0.5,
+                min_value=0.1,
+                max_value=2.0,
+                width=150,
+                format="%.2f",
+                callback=lambda s, a: setattr(state, 'particle_size', a)
+            )
+        dpg.add_spacer(height=5)
+        # 表示オプション
+        dpg.add_checkbox(
+            label="流線（トレイル）表示",
+            tag="show_trails_checkbox",
+            default_value=False,
+            callback=lambda s, a: setattr(state, 'show_trails', a),
+            indent=10
+        )
+        dpg.add_checkbox(
+            label="水槽の壁面表示",
+            tag="show_tank_checkbox",
+            default_value=True,
+            callback=lambda s, a: setattr(state, 'show_tank_walls', a),
+            indent=10
+        )
+        dpg.add_spacer(height=10)
+    dpg.add_separator()
+
+
+def _create_simulation_control_section():
+    """シミュレーション制御セクション"""
+    with dpg.collapsing_header(label="シミュレーション制御", default_open=True):
+        dpg.add_spacer(height=5)
+        # 一時停止/再生ボタン
+        with dpg.group(horizontal=True):
+            dpg.add_button(label="Pause", tag="pause_button", callback=lambda: toggle_pause(), width=120)
+            dpg.add_spacer(width=15)
+            dpg.add_text("Playing", tag="pause_status_text")
+        dpg.add_spacer(height=5)
+        # シミュレーション速度
+        dpg.add_text("シミュレーション速度", indent=10)
+        dpg.add_radio_button(
+            items=["0.25x", "0.5x", "1x", "2x", "4x"],
+            tag="speed_radio",
+            default_value="1x",
+            horizontal=True,
+            callback=lambda s, a: setattr(state, 'sim_speed', {"0.25x": 0.25, "0.5x": 0.5, "1x": 1.0, "2x": 2.0, "4x": 4.0}[a]),
+            indent=10
+        )
+        dpg.add_spacer(height=5)
+        # 経過時間表示
+        dpg.add_text("経過時間: 0.0 秒", tag="elapsed_time_text", indent=10)
+        dpg.add_spacer(height=10)
+    dpg.add_separator()
+
+
+def _create_additional_ports_section():
+    """追加ポートセクション"""
+    with dpg.collapsing_header(label="追加ポート", default_open=False):
+        dpg.add_spacer(height=5)
+        # 2番目のInlet
+        dpg.add_checkbox(
+            label="2番目の流入口を有効化",
+            tag="use_inlet2_checkbox",
+            default_value=False,
+            callback=lambda s, a: setattr(state, 'use_second_inlet', a),
+            indent=10
+        )
+        with dpg.group(tag="inlet2_group"):
+            create_labeled_slider_with_input("Inlet2 Y (mm)", "inlet2_y", state.inlet2_y_mm, 20.0, 450.0)
+            create_labeled_slider_with_input("Inlet2 Z (mm)", "inlet2_z", state.inlet2_z_mm, 20.0, 980.0)
+            create_labeled_slider_with_input("Inlet2 半径", "inlet2_radius", state.inlet2_radius_mm, 20.0, 100.0)
+            create_labeled_slider_with_input("Inlet2 流量", "inlet2_flow", state.inlet2_flow, 0.0, 1000.0)
+        dpg.add_spacer(height=10)
+        # 2番目のOutlet
+        dpg.add_checkbox(
+            label="2番目の流出口を有効化",
+            tag="use_outlet2_checkbox",
+            default_value=False,
+            callback=lambda s, a: setattr(state, 'use_second_outlet', a),
+            indent=10
+        )
+        with dpg.group(tag="outlet2_group"):
+            create_labeled_slider_with_input("Outlet2 Y (mm)", "outlet2_y", state.outlet2_y_mm, 20.0, 450.0)
+            create_labeled_slider_with_input("Outlet2 Z (mm)", "outlet2_z", state.outlet2_z_mm, 20.0, 980.0)
+            create_labeled_slider_with_input("Outlet2 半径", "outlet2_radius", state.outlet2_radius_mm, 20.0, 100.0)
+            create_labeled_slider_with_input("Outlet2 流量", "outlet2_flow", state.outlet2_flow, 0.0, 1000.0)
+        dpg.add_spacer(height=10)
+    dpg.add_separator()
+
+
+def _create_obstacles_section():
+    """障害物セクション"""
+    with dpg.collapsing_header(label="障害物", default_open=False):
+        dpg.add_spacer(height=5)
+        dpg.add_text("障害物を追加:", indent=10)
+        with dpg.group(horizontal=True):
+            dpg.add_combo(items=["球", "箱"], tag="obstacle_type_combo", default_value="球", width=80)
+            dpg.add_spacer(width=10)
+            dpg.add_button(label="追加", callback=lambda: add_obstacle(), width=60)
+            dpg.add_button(label="全削除", callback=lambda: clear_obstacles(), width=60)
+        dpg.add_spacer(height=5)
+        # 障害物パラメータ
+        create_labeled_slider_with_input("X位置 (mm)", "obs_x", 500.0, 0.0, 1000.0)
+        create_labeled_slider_with_input("Y位置 (mm)", "obs_y", 250.0, 0.0, 500.0)
+        create_labeled_slider_with_input("Z位置 (mm)", "obs_z", 500.0, 0.0, 1000.0)
+        create_labeled_slider_with_input("サイズ (mm)", "obs_size", 50.0, 20.0, 200.0)
+        dpg.add_spacer(height=5)
+        dpg.add_text("配置済み障害物: 0個", tag="obstacle_count_text", indent=10)
+        dpg.add_checkbox(
+            label="障害物を表示",
+            tag="show_obstacles_checkbox",
+            default_value=True,
+            callback=lambda s, a: setattr(state, 'show_obstacles', a),
+            indent=10
+        )
+        dpg.add_spacer(height=10)
+    dpg.add_separator()
+
+
+def _create_analysis_section():
+    """分析ツールセクション"""
+    with dpg.collapsing_header(label="分析ツール", default_open=True):
+        dpg.add_spacer(height=5)
+        # 流量計表示
+        dpg.add_checkbox(
+            label="流量計を表示",
+            tag="show_flow_meter_checkbox",
+            default_value=True,
+            callback=lambda s, a: setattr(state, 'show_flow_meter', a),
+            indent=10
+        )
+        dpg.add_text("流入口: 0 粒子/秒", tag="inlet_flow_text", indent=10)
+        dpg.add_text("流出口: 0 粒子/秒", tag="outlet_flow_text", indent=10)
+        dpg.add_text("平均速度: 0.0 mm/s", tag="avg_speed_text", indent=10)
+        dpg.add_spacer(height=10)
+        dpg.add_separator()
+        # 断面ビュー
+        dpg.add_checkbox(
+            label="断面ビューを表示",
+            tag="show_cross_section_checkbox",
+            default_value=False,
+            callback=lambda s, a: setattr(state, 'show_cross_section', a),
+            indent=10
+        )
+        dpg.add_text("断面軸:", indent=10)
+        dpg.add_radio_button(
+            items=["X", "Y", "Z"],
+            tag="cross_section_axis_radio",
+            default_value="X",
+            horizontal=True,
+            callback=lambda s, a: setattr(state, 'cross_section_axis', a),
+            indent=10
+        )
+        with dpg.group(horizontal=True):
+            dpg.add_text("位置 (%)", indent=10)
+            dpg.add_slider_float(
+                tag="cross_section_pos_slider",
+                default_value=50.0,
+                min_value=0.0,
+                max_value=100.0,
+                width=150,
+                callback=lambda s, a: setattr(state, 'cross_section_pos', a)
+            )
+        dpg.add_spacer(height=10)
+        dpg.add_separator()
+        # Screenshot / Recording
+        dpg.add_text("Screenshot / Recording")
+        with dpg.group(horizontal=True):
+            dpg.add_button(label="Screenshot", callback=lambda: take_screenshot(), width=150)
+            dpg.add_button(label="Start Record", tag="record_button", callback=lambda: toggle_recording(), width=150)
+        dpg.add_text("Save to: ./screenshots", tag="save_path_text")
+        dpg.add_text("Frames: 0", tag="frame_count_text")
+        dpg.add_spacer(height=10)
+
 
 def setup_dpg_ui():
+    """Dear PyGui UIをセットアップ"""
     dpg.create_context()
     
-    # フォント設定（日本語対応）
+    # フォント設定（日本語対応・大きめサイズ）
     with dpg.font_registry():
         font_path = "C:/Windows/Fonts/meiryo.ttc"
         try:
-            with dpg.font(font_path, 16) as default_font:
+            with dpg.font(font_path, 20) as default_font:
                 dpg.add_font_range_hint(dpg.mvFontRangeHint_Japanese)
             dpg.bind_font(default_font)
         except Exception as e:
             print(f"Font loading failed: {e}")
     
-    # テーマ設定（Windows風ダークテーマ）
+    # テーマ設定（見やすいダークテーマ）
     with dpg.theme() as global_theme:
         with dpg.theme_component(dpg.mvAll):
-            dpg.add_theme_color(dpg.mvThemeCol_WindowBg, (45, 45, 48, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_WindowBg, (40, 40, 45, 255))
             dpg.add_theme_color(dpg.mvThemeCol_TitleBg, (30, 30, 30, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_TitleBgActive, (60, 60, 65, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (62, 62, 66, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (75, 75, 80, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_SliderGrab, (0, 122, 204, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_SliderGrabActive, (0, 150, 230, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_Button, (62, 62, 66, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (80, 80, 85, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (0, 122, 204, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_Header, (60, 60, 65, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_HeaderHovered, (80, 80, 85, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (0, 180, 100, 255))
-            dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 4)
-            dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 6)
-            dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 6, 4)
-            dpg.add_theme_style(dpg.mvStyleVar_ItemSpacing, 8, 6)
+            dpg.add_theme_color(dpg.mvThemeCol_TitleBgActive, (50, 80, 120, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (55, 55, 60, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (70, 70, 80, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_SliderGrab, (80, 150, 220, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_SliderGrabActive, (100, 180, 255, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_Button, (60, 90, 130, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (80, 120, 170, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (100, 150, 200, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_Header, (50, 80, 120, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_HeaderHovered, (70, 100, 150, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (100, 200, 150, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_Text, (230, 230, 235, 255))
+            dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 6)
+            dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 8)
+            dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 10, 6)
+            dpg.add_theme_style(dpg.mvStyleVar_ItemSpacing, 10, 8)
+            dpg.add_theme_style(dpg.mvStyleVar_ItemInnerSpacing, 8, 6)
     
     dpg.bind_theme(global_theme)
     
     # メインウィンドウ
-    with dpg.window(label="コントロールパネル", tag="main_window", width=400, height=680, no_close=True):
-        
-        # 設定保存/読み込みセクション
-        with dpg.group(horizontal=True):
-            dpg.add_button(
-                label="💾 設定を保存",
-                callback=lambda: on_save_config(),
-                width=130
-            )
-            dpg.add_spacer(width=10)
-            dpg.add_button(
-                label="📂 設定を読み込み",
-                callback=lambda: on_load_config(),
-                width=130
-            )
-        dpg.add_text("", tag="config_status_text")
-        dpg.add_spacer(height=5)
-        dpg.add_separator()
-        
-        # タンク寸法セクション
-        with dpg.collapsing_header(label="タンク寸法", default_open=True):
-            dpg.add_spacer(height=5)
-            create_labeled_slider_with_input("幅 (mm)", "tank_width", state.tank_width, 500.0, 2000.0)
-            create_labeled_slider_with_input("高さ (mm)", "tank_height", state.tank_height, 200.0, 1000.0)
-            create_labeled_slider_with_input("奥行 (mm)", "tank_depth", state.tank_depth, 500.0, 2000.0)
-            dpg.add_spacer(height=5)
-            dpg.add_button(label="寸法を適用", callback=on_apply_dimensions, width=150)
-            dpg.add_spacer(height=10)
-        
-        dpg.add_separator()
-        
-        # 流入口セクション
-        with dpg.collapsing_header(label="流入口 (Inlet)", default_open=True):
-            dpg.add_spacer(height=5)
-            create_labeled_slider_with_input("Y位置 (mm)", "inlet_y", state.inlet_y_mm, 20.0, 450.0)
-            create_labeled_slider_with_input("Z位置 (mm)", "inlet_z", state.inlet_z_mm, 20.0, 980.0)
-            create_labeled_slider_with_input("半径 (mm)", "inlet_radius", state.inlet_radius_mm, 20.0, 150.0)
-            create_labeled_slider_with_input("流量 (L/min)", "inlet_flow", state.inlet_flow, 0.0, 2000.0)
-            dpg.add_spacer(height=10)
-        
-        dpg.add_separator()
-        
-        # 流出口セクション
-        with dpg.collapsing_header(label="流出口 (Outlet)", default_open=True):
-            dpg.add_spacer(height=5)
-            dpg.add_checkbox(label="流入口と同期", tag="sync_checkbox", default_value=state.is_sync, callback=lambda: update_state_from_ui())
-            dpg.add_spacer(height=5)
-            create_labeled_slider_with_input("Y位置 (mm)", "outlet_y", state.outlet_y_mm, 20.0, 450.0)
-            create_labeled_slider_with_input("Z位置 (mm)", "outlet_z", state.outlet_z_mm, 20.0, 980.0)
-            create_labeled_slider_with_input("半径 (mm)", "outlet_radius", state.outlet_radius_mm, 20.0, 150.0)
-            create_labeled_slider_with_input("流量 (L/min)", "outlet_flow", state.outlet_flow, 0.0, 2000.0)
-            dpg.add_spacer(height=10)
-        
-        dpg.add_separator()
-        
-        # 粒子セクション
-        with dpg.collapsing_header(label="粒子設定", default_open=True):
-            dpg.add_spacer(height=5)
-            with dpg.group(horizontal=True):
-                dpg.add_text("粒子数", indent=10)
-                dpg.add_spacer(width=10)
-                dpg.add_slider_int(
-                    tag="particle_slider",
-                    default_value=state.current_num_particles,
-                    min_value=MIN_NUM_PARTICLES,
-                    max_value=MAX_NUM_PARTICLES,
-                    width=180,
-                    callback=lambda: update_state_from_ui()
-                )
-                dpg.add_input_int(
-                    tag="particle_input",
-                    default_value=state.current_num_particles,
-                    width=70,
-                    step=0,
-                    callback=lambda s, a: dpg.set_value("particle_slider", a)
-                )
-            
-            dpg.add_text(f"現在: {state.current_num_particles:,}", tag="particle_count_text", indent=10)
-            dpg.add_spacer(height=5)
-            with dpg.group(horizontal=True):
-                dpg.add_button(label="粒子数を適用", callback=on_apply_particles, width=120)
-                dpg.add_spacer(width=10)
-                dpg.add_button(label="リセット", callback=on_reset_particles, width=80)
-            dpg.add_spacer(height=10)
-        
-        dpg.add_separator()
-        dpg.add_spacer(height=10)
-        
-        # 操作説明
-        with dpg.collapsing_header(label="操作方法", default_open=False):
-            dpg.add_text("右クリック+ドラッグ: 視点回転", indent=10)
-            dpg.add_text("Shift+右クリック: ズーム", indent=10)
-            dpg.add_text("中クリック+ドラッグ: パン", indent=10)
-        
-        dpg.add_separator()
-        
-        # 視覚化セクション
-        with dpg.collapsing_header(label="視覚化設定", default_open=True):
-            dpg.add_spacer(height=5)
-            
-            # カラーマップ選択
-            dpg.add_text("カラーマップ", indent=10)
-            dpg.add_radio_button(
-                items=["青→赤", "レインボー", "クールウォーム", "Viridis"],
-                tag="colormap_radio",
-                default_value="青→赤",
-                horizontal=True,
-                callback=lambda s, a: setattr(state, 'colormap_mode', ["青→赤", "レインボー", "クールウォーム", "Viridis"].index(a)),
-                indent=10
-            )
-            dpg.add_spacer(height=5)
-            
-            # 粒子サイズ
-            with dpg.group(horizontal=True):
-                dpg.add_text("粒子サイズ", indent=10)
-                dpg.add_slider_float(
-                    tag="particle_size_slider",
-                    default_value=0.5,
-                    min_value=0.1,
-                    max_value=2.0,
-                    width=150,
-                    format="%.2f",
-                    callback=lambda s, a: setattr(state, 'particle_size', a)
-                )
-            
-            dpg.add_spacer(height=5)
-            
-            # 表示オプション
-            dpg.add_checkbox(
-                label="流線（トレイル）表示",
-                tag="show_trails_checkbox",
-                default_value=False,
-                callback=lambda s, a: setattr(state, 'show_trails', a),
-                indent=10
-            )
-            dpg.add_checkbox(
-                label="水槽の壁面表示",
-                tag="show_tank_checkbox",
-                default_value=True,
-                callback=lambda s, a: setattr(state, 'show_tank_walls', a),
-                indent=10
-            )
-            dpg.add_spacer(height=10)
-        
-        dpg.add_separator()
-        
-        # シミュレーション制御セクション (5, 6)
-        with dpg.collapsing_header(label="シミュレーション制御", default_open=True):
-            dpg.add_spacer(height=5)
-            
-            # 一時停止/再生ボタン
-            with dpg.group(horizontal=True):
-                dpg.add_button(
-                    label="⏸ 一時停止",
-                    tag="pause_button",
-                    callback=lambda: toggle_pause(),
-                    width=100
-                )
-                dpg.add_spacer(width=10)
-                dpg.add_text("再生中", tag="pause_status_text")
-            
-            dpg.add_spacer(height=5)
-            
-            # シミュレーション速度
-            dpg.add_text("シミュレーション速度", indent=10)
-            dpg.add_radio_button(
-                items=["0.25x", "0.5x", "1x", "2x", "4x"],
-                tag="speed_radio",
-                default_value="1x",
-                horizontal=True,
-                callback=lambda s, a: setattr(state, 'sim_speed', {"0.25x": 0.25, "0.5x": 0.5, "1x": 1.0, "2x": 2.0, "4x": 4.0}[a]),
-                indent=10
-            )
-            
-            dpg.add_spacer(height=5)
-            
-            # 経過時間表示
-            dpg.add_text("経過時間: 0.0 秒", tag="elapsed_time_text", indent=10)
-            dpg.add_spacer(height=10)
-        
-        dpg.add_separator()
-        
-        # 追加ポートセクション (7)
-        with dpg.collapsing_header(label="追加ポート", default_open=False):
-            dpg.add_spacer(height=5)
-            
-            # 2番目のInlet
-            dpg.add_checkbox(
-                label="2番目の流入口を有効化",
-                tag="use_inlet2_checkbox",
-                default_value=False,
-                callback=lambda s, a: setattr(state, 'use_second_inlet', a),
-                indent=10
-            )
-            with dpg.group(tag="inlet2_group"):
-                create_labeled_slider_with_input("Inlet2 Y (mm)", "inlet2_y", state.inlet2_y_mm, 20.0, 450.0)
-                create_labeled_slider_with_input("Inlet2 Z (mm)", "inlet2_z", state.inlet2_z_mm, 20.0, 980.0)
-                create_labeled_slider_with_input("Inlet2 半径", "inlet2_radius", state.inlet2_radius_mm, 20.0, 100.0)
-                create_labeled_slider_with_input("Inlet2 流量", "inlet2_flow", state.inlet2_flow, 0.0, 1000.0)
-            
-            dpg.add_spacer(height=10)
-            
-            # 2番目のOutlet
-            dpg.add_checkbox(
-                label="2番目の流出口を有効化",
-                tag="use_outlet2_checkbox",
-                default_value=False,
-                callback=lambda s, a: setattr(state, 'use_second_outlet', a),
-                indent=10
-            )
-            with dpg.group(tag="outlet2_group"):
-                create_labeled_slider_with_input("Outlet2 Y (mm)", "outlet2_y", state.outlet2_y_mm, 20.0, 450.0)
-                create_labeled_slider_with_input("Outlet2 Z (mm)", "outlet2_z", state.outlet2_z_mm, 20.0, 980.0)
-                create_labeled_slider_with_input("Outlet2 半径", "outlet2_radius", state.outlet2_radius_mm, 20.0, 100.0)
-                create_labeled_slider_with_input("Outlet2 流量", "outlet2_flow", state.outlet2_flow, 0.0, 1000.0)
-            
-            dpg.add_spacer(height=10)
-        
-        dpg.add_separator()
-        
-        # 障害物セクション (8)
-        with dpg.collapsing_header(label="障害物", default_open=False):
-            dpg.add_spacer(height=5)
-            
-            dpg.add_text("障害物を追加:", indent=10)
-            with dpg.group(horizontal=True):
-                dpg.add_combo(
-                    items=["球", "箱"],
-                    tag="obstacle_type_combo",
-                    default_value="球",
-                    width=80
-                )
-                dpg.add_spacer(width=10)
-                dpg.add_button(label="追加", callback=lambda: add_obstacle(), width=60)
-                dpg.add_button(label="全削除", callback=lambda: clear_obstacles(), width=60)
-            
-            dpg.add_spacer(height=5)
-            
-            # 障害物パラメータ
-            create_labeled_slider_with_input("X位置 (mm)", "obs_x", 500.0, 0.0, 1000.0)
-            create_labeled_slider_with_input("Y位置 (mm)", "obs_y", 250.0, 0.0, 500.0)
-            create_labeled_slider_with_input("Z位置 (mm)", "obs_z", 500.0, 0.0, 1000.0)
-            create_labeled_slider_with_input("サイズ (mm)", "obs_size", 50.0, 20.0, 200.0)
-            
-            dpg.add_spacer(height=5)
-            dpg.add_text("配置済み障害物: 0個", tag="obstacle_count_text", indent=10)
-            dpg.add_checkbox(
-                label="障害物を表示",
-                tag="show_obstacles_checkbox",
-                default_value=True,
-                callback=lambda s, a: setattr(state, 'show_obstacles', a),
-                indent=10
-            )
-            dpg.add_spacer(height=10)
-        
-        dpg.add_separator()
-        
-        # 分析ツールセクション (9, 10, 11)
-        with dpg.collapsing_header(label="分析ツール", default_open=True):
-            dpg.add_spacer(height=5)
-            
-            # 流量計表示 (9)
-            dpg.add_checkbox(
-                label="流量計を表示",
-                tag="show_flow_meter_checkbox",
-                default_value=True,
-                callback=lambda s, a: setattr(state, 'show_flow_meter', a),
-                indent=10
-            )
-            dpg.add_text("流入口: 0 粒子/秒", tag="inlet_flow_text", indent=10)
-            dpg.add_text("流出口: 0 粒子/秒", tag="outlet_flow_text", indent=10)
-            dpg.add_text("平均速度: 0.0 mm/s", tag="avg_speed_text", indent=10)
-            
-            dpg.add_spacer(height=10)
-            dpg.add_separator()
-            
-            # 断面ビュー (10)
-            dpg.add_checkbox(
-                label="断面ビューを表示",
-                tag="show_cross_section_checkbox",
-                default_value=False,
-                callback=lambda s, a: setattr(state, 'show_cross_section', a),
-                indent=10
-            )
-            dpg.add_text("断面軸:", indent=10)
-            dpg.add_radio_button(
-                items=["X", "Y", "Z"],
-                tag="cross_section_axis_radio",
-                default_value="X",
-                horizontal=True,
-                callback=lambda s, a: setattr(state, 'cross_section_axis', a),
-                indent=10
-            )
-            with dpg.group(horizontal=True):
-                dpg.add_text("位置 (%)", indent=10)
-                dpg.add_slider_float(
-                    tag="cross_section_pos_slider",
-                    default_value=50.0,
-                    min_value=0.0,
-                    max_value=100.0,
-                    width=150,
-                    callback=lambda s, a: setattr(state, 'cross_section_pos', a)
-                )
-            
-            dpg.add_spacer(height=10)
-            dpg.add_separator()
-            
-            # スクリーンショット/録画 (11)
-            dpg.add_text("スクリーンショット/録画", indent=10)
-            with dpg.group(horizontal=True):
-                dpg.add_button(
-                    label="📷 スクリーンショット",
-                    callback=lambda: take_screenshot(),
-                    width=140
-                )
-                dpg.add_button(
-                    label="🔴 録画開始",
-                    tag="record_button",
-                    callback=lambda: toggle_recording(),
-                    width=100
-                )
-            dpg.add_text("保存先: ./screenshots", tag="save_path_text", indent=10)
-            dpg.add_text("フレーム: 0", tag="frame_count_text", indent=10)
-            dpg.add_spacer(height=10)
+    with dpg.window(label="Control Panel", tag="main_window", width=500, height=800, no_close=True):
+        _create_config_section()
+        _create_tank_section()
+        _create_inlet_section()
+        _create_outlet_section()
+        _create_particle_section()
+        _create_controls_section()
+        _create_visualization_section()
+        _create_simulation_control_section()
+        _create_additional_ports_section()
+        _create_obstacles_section()
+        _create_analysis_section()
     
-    dpg.create_viewport(title='Fluid Simulation - Control Panel', width=460, height=1000, x_pos=50, y_pos=10)
+    dpg.create_viewport(title='Fluid Simulation', width=520, height=1050, x_pos=50, y_pos=10)
     dpg.setup_dearpygui()
     dpg.show_viewport()
     dpg.set_primary_window("main_window", True)
@@ -706,11 +683,11 @@ def toggle_pause():
     """一時停止/再生を切り替え"""
     state.is_paused = not state.is_paused
     if state.is_paused:
-        dpg.set_item_label("pause_button", "▶ 再生")
-        dpg.set_value("pause_status_text", "一時停止中")
+        dpg.set_item_label("pause_button", "Play")
+        dpg.set_value("pause_status_text", "Paused")
     else:
-        dpg.set_item_label("pause_button", "⏸ 一時停止")
-        dpg.set_value("pause_status_text", "再生中")
+        dpg.set_item_label("pause_button", "Pause")
+        dpg.set_value("pause_status_text", "Playing")
 
 
 def add_obstacle():
@@ -757,10 +734,10 @@ def take_screenshot():
     
     try:
         _window_ref.save_image(filename)
-        dpg.set_value("save_path_text", f"保存: {filename}")
-        print(f"スクリーンショットを保存: {filename}")
+        dpg.set_value("save_path_text", f"Saved: {filename}")
+        print(f"Screenshot saved: {filename}")
     except Exception as e:
-        print(f"スクリーンショット保存エラー: {e}")
+        print(f"Screenshot error: {e}")
 
 
 def toggle_recording():
@@ -768,13 +745,13 @@ def toggle_recording():
     state.is_recording = not state.is_recording
     
     if state.is_recording:
-        dpg.set_item_label("record_button", "⏹ 停止")
+        dpg.set_item_label("record_button", "Stop Record")
         state.frame_count = 0
         os.makedirs(state.screenshot_dir, exist_ok=True)
-        dpg.set_value("save_path_text", "録画中...")
+        dpg.set_value("save_path_text", "Recording...")
     else:
-        dpg.set_item_label("record_button", "🔴 録画開始")
-        dpg.set_value("save_path_text", f"録画完了: {state.frame_count}フレーム")
+        dpg.set_item_label("record_button", "Start Record")
+        dpg.set_value("save_path_text", f"Done: {state.frame_count} frames")
 
 
 def save_recording_frame():
@@ -789,7 +766,7 @@ def save_recording_frame():
     try:
         _window_ref.save_image(filename)
         state.frame_count += 1
-        dpg.set_value("frame_count_text", f"フレーム: {state.frame_count}")
+        dpg.set_value("frame_count_text", f"Frames: {state.frame_count}")
     except:
         pass
 
