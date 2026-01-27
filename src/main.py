@@ -337,9 +337,11 @@ def create_labeled_slider_with_input(label, tag_base, default_val, min_val, max_
 def _create_config_section():
     """設定保存/読み込みセクション"""
     with dpg.group(horizontal=True):
-        dpg.add_button(label="Save Config", callback=lambda: on_save_config(), width=150)
-        dpg.add_spacer(width=10)
-        dpg.add_button(label="Load Config", callback=lambda: on_load_config(), width=150)
+        dpg.add_button(label="Save", callback=lambda: on_save_config(), width=100)
+        dpg.add_spacer(width=5)
+        dpg.add_button(label="Load", callback=lambda: on_load_config(), width=100)
+        dpg.add_spacer(width=5)
+        dpg.add_button(label="Reset", callback=on_reset_particles, width=100)
     dpg.add_text("", tag="config_status_text")
     dpg.add_spacer(height=5)
     dpg.add_separator()
@@ -347,7 +349,7 @@ def _create_config_section():
 
 def _create_tank_section():
     """タンク寸法セクション"""
-    with dpg.collapsing_header(label="タンク寸法", default_open=True):
+    with dpg.collapsing_header(label="タンク寸法", default_open=False):
         dpg.add_spacer(height=5)
         create_labeled_slider_with_input("幅 (mm)", "tank_width", state.tank_width, 500.0, 2000.0)
         create_labeled_slider_with_input("高さ (mm)", "tank_height", state.tank_height, 200.0, 1000.0)
@@ -360,7 +362,7 @@ def _create_tank_section():
 
 def _create_inlet_section():
     """流入口セクション"""
-    with dpg.collapsing_header(label="流入口 (Inlet)", default_open=True):
+    with dpg.collapsing_header(label="流入口 (Inlet)", default_open=False):
         dpg.add_spacer(height=5)
         create_labeled_slider_with_input("Y位置 (mm)", "inlet_y", state.inlet_y_mm, 20.0, 450.0)
         create_labeled_slider_with_input("Z位置 (mm)", "inlet_z", state.inlet_z_mm, 20.0, 980.0)
@@ -372,7 +374,7 @@ def _create_inlet_section():
 
 def _create_outlet_section():
     """流出口セクション"""
-    with dpg.collapsing_header(label="流出口 (Outlet)", default_open=True):
+    with dpg.collapsing_header(label="流出口 (Outlet)", default_open=False):
         dpg.add_spacer(height=5)
         dpg.add_checkbox(label="流入口と同期", tag="sync_checkbox", default_value=state.is_sync, callback=lambda: update_state_from_ui())
         dpg.add_spacer(height=5)
@@ -386,7 +388,7 @@ def _create_outlet_section():
 
 def _create_particle_section():
     """粒子設定セクション"""
-    with dpg.collapsing_header(label="粒子設定", default_open=True):
+    with dpg.collapsing_header(label="粒子設定", default_open=False):
         dpg.add_spacer(height=5)
         with dpg.group(horizontal=True):
             dpg.add_text("粒子数", indent=10)
@@ -408,27 +410,15 @@ def _create_particle_section():
             )
         dpg.add_text(f"現在: {state.current_num_particles:,}", tag="particle_count_text", indent=10)
         dpg.add_spacer(height=5)
-        with dpg.group(horizontal=True):
-            dpg.add_button(label="粒子数を適用", callback=on_apply_particles, width=120)
-            dpg.add_spacer(width=10)
-            dpg.add_button(label="リセット", callback=on_reset_particles, width=80)
+        dpg.add_button(label="粒子数を適用", callback=on_apply_particles, width=120)
         dpg.add_spacer(height=10)
     dpg.add_separator()
     dpg.add_spacer(height=10)
 
 
-def _create_controls_section():
-    """操作説明セクション"""
-    with dpg.collapsing_header(label="操作方法", default_open=False):
-        dpg.add_text("右クリック+ドラッグ: 視点回転", indent=10)
-        dpg.add_text("Shift+右クリック: ズーム", indent=10)
-        dpg.add_text("中クリック+ドラッグ: パン", indent=10)
-    dpg.add_separator()
-
-
 def _create_visualization_section():
     """視覚化設定セクション"""
-    with dpg.collapsing_header(label="視覚化設定", default_open=True):
+    with dpg.collapsing_header(label="視覚化設定", default_open=False):
         dpg.add_spacer(height=5)
         # カラーマップ選択
         dpg.add_text("カラーマップ", indent=10)
@@ -475,7 +465,7 @@ def _create_visualization_section():
 
 def _create_simulation_control_section():
     """シミュレーション制御セクション"""
-    with dpg.collapsing_header(label="シミュレーション制御", default_open=True):
+    with dpg.collapsing_header(label="シミュレーション制御", default_open=False):
         dpg.add_spacer(height=5)
         # 一時停止/再生ボタン
         with dpg.group(horizontal=True):
@@ -566,7 +556,7 @@ def _create_obstacles_section():
 
 def _create_analysis_section():
     """分析ツールセクション"""
-    with dpg.collapsing_header(label="分析ツール", default_open=True):
+    with dpg.collapsing_header(label="分析ツール", default_open=False):
         dpg.add_spacer(height=5)
         # 流量計表示
         dpg.add_checkbox(
@@ -666,7 +656,6 @@ def setup_dpg_ui():
         _create_inlet_section()
         _create_outlet_section()
         _create_particle_section()
-        _create_controls_section()
         _create_visualization_section()
         _create_simulation_control_section()
         _create_additional_ports_section()
