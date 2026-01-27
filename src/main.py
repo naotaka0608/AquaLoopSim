@@ -36,6 +36,12 @@ class AppState:
         self.needs_dimension_update = False
         self.needs_particle_reset = False
         self.needs_particle_count_update = False
+        
+        # 視覚化設定
+        self.colormap_mode = 0  # 0=Blue-Red, 1=Rainbow, 2=Cool-Warm, 3=Viridis
+        self.particle_size = 0.5
+        self.show_trails = False
+        self.show_tank_walls = True
 
 state = AppState()
 
@@ -294,8 +300,58 @@ def setup_dpg_ui():
             dpg.add_text("右クリック+ドラッグ: 視点回転", indent=10)
             dpg.add_text("Shift+右クリック: ズーム", indent=10)
             dpg.add_text("中クリック+ドラッグ: パン", indent=10)
+        
+        dpg.add_separator()
+        
+        # 視覚化セクション
+        with dpg.collapsing_header(label="視覚化設定", default_open=True):
+            dpg.add_spacer(height=5)
+            
+            # カラーマップ選択
+            dpg.add_text("カラーマップ", indent=10)
+            dpg.add_radio_button(
+                items=["青→赤", "レインボー", "クールウォーム", "Viridis"],
+                tag="colormap_radio",
+                default_value="青→赤",
+                horizontal=True,
+                callback=lambda s, a: setattr(state, 'colormap_mode', ["青→赤", "レインボー", "クールウォーム", "Viridis"].index(a)),
+                indent=10
+            )
+            dpg.add_spacer(height=5)
+            
+            # 粒子サイズ
+            with dpg.group(horizontal=True):
+                dpg.add_text("粒子サイズ", indent=10)
+                dpg.add_slider_float(
+                    tag="particle_size_slider",
+                    default_value=0.5,
+                    min_value=0.1,
+                    max_value=2.0,
+                    width=150,
+                    format="%.2f",
+                    callback=lambda s, a: setattr(state, 'particle_size', a)
+                )
+            
+            dpg.add_spacer(height=5)
+            
+            # 表示オプション
+            dpg.add_checkbox(
+                label="流線（トレイル）表示",
+                tag="show_trails_checkbox",
+                default_value=False,
+                callback=lambda s, a: setattr(state, 'show_trails', a),
+                indent=10
+            )
+            dpg.add_checkbox(
+                label="水槽の壁面表示",
+                tag="show_tank_checkbox",
+                default_value=True,
+                callback=lambda s, a: setattr(state, 'show_tank_walls', a),
+                indent=10
+            )
+            dpg.add_spacer(height=10)
     
-    dpg.create_viewport(title='Fluid Simulation - Control Panel', width=420, height=700, x_pos=50, y_pos=50)
+    dpg.create_viewport(title='Fluid Simulation - Control Panel', width=440, height=850, x_pos=50, y_pos=50)
     dpg.setup_dearpygui()
     dpg.show_viewport()
     dpg.set_primary_window("main_window", True)
@@ -386,6 +442,9 @@ def main():
             state.inlet_flow, state.outlet_flow
         )
         
+        # カラーマップ更新
+        solver.colormap_mode[None] = state.colormap_mode
+        
         solver.step()
         
         # Camera Control
@@ -434,9 +493,41 @@ def main():
         scene.point_light(pos=(res_x/2, res_y*1.5, res_z/2), color=(1, 1, 1))
         scene.ambient_light((0.5, 0.5, 0.5))
         
-        scene.particles(solver.particle_pos, radius=0.5, per_vertex_color=solver.particle_color)
-        scene.lines(box_vertices, indices=box_indices, color=(1, 1, 1), width=2.0)
+        # 粒子描画（サイズ設定反映）
+        scene.particles(solver.particle_pos, radius=state.particle_size, per_vertex_color=solver.particle_color)
+        
+        # 水槽の壁面表示
+        if state.show_tank_walls:
+            scene.lines(box_vertices, indices=box_indices, color=(1, 1, 1), width=2.0)
+        
+        # パイプ描画
         scene.lines(pipe_v_field, indices=pipe_i_field, color=(0.8, 0.8, 0.8), width=2.0, vertex_count=num_pipe_indices[None])
+        
+        # トレイル描画
+        if state.show_trails:
+            # トレイルデータを取得してライン描画
+            trail_np = solver.trail_positions.to_numpy()
+            trail_idx_np = solver.trail_index.to_numpy()
+            
+            # サンプリング（全粒子だと重いので間引く）
+            sample_step = max(1, state.current_num_particles // 500)
+            for i in range(0, min(500, state.current_num_particles), 1):
+                p_idx = i * sample_step
+                if p_idx >= state.current_num_particles:
+                    break
+                idx = trail_idx_np[p_idx]
+                # トレイルの点を順番に取得
+                trail_points = []
+                for j in range(solver.trail_length):
+                    actual_idx = (idx - j - 1 + solver.trail_length) % solver.trail_length
+                    pos = trail_np[p_idx, actual_idx]
+                    if pos[0] > 0:  # タンク内のみ
+                        trail_points.append(pos)
+                
+                # 線として描画（簡易版）
+                if len(trail_points) >= 2:
+                    for k in range(len(trail_points) - 1):
+                        pass  # Taichi UIでは動的なライン数描画が難しいため、パーティクルで代用
         
         canvas.scene(scene)
         window.show()

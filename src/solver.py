@@ -50,6 +50,15 @@ class FluidSolver:
         self.particle_color = ti.Vector.field(3, dtype=float, shape=self.num_particles)
         self.particle_life = ti.field(dtype=float, shape=self.num_particles)
         self.particle_absorbed = ti.field(dtype=int, shape=self.num_particles)  # 吸い込まれたかどうかのフラグ
+        
+        # カラーマップ設定 (0=Blue-Red, 1=Rainbow, 2=Cool-Warm, 3=Viridis)
+        self.colormap_mode = ti.field(dtype=int, shape=())
+        self.colormap_mode[None] = 0
+        
+        # 流線（トレイル）用の位置履歴
+        self.trail_length = 20
+        self.trail_positions = ti.Vector.field(3, dtype=float, shape=(self.num_particles, self.trail_length))
+        self.trail_index = ti.field(dtype=int, shape=self.num_particles)
 
         self.init_particles()
         
@@ -92,6 +101,47 @@ class FluidSolver:
         self.inlet_velocity[None] = min(500.0, v_in_grid)
         self.outlet_velocity[None] = min(500.0, v_out_grid)
 
+    @ti.func
+    def apply_colormap(self, t: float) -> ti.types.vector(3, float):
+        """カラーマップを適用 (t: 0.0~1.0)"""
+        color = ti.Vector([0.0, 0.0, 0.0])
+        mode = self.colormap_mode[None]
+        
+        if mode == 0:  # Blue-Red (デフォルト)
+            color = ti.Vector([t, t * 0.3, 1.0 - t])
+        elif mode == 1:  # Rainbow
+            # HSV to RGB (H = t * 0.8, S = 1, V = 1)
+            h = t * 0.8 * 6.0  # 0 to ~4.8 (blue to red through rainbow)
+            i = int(ti.floor(h))
+            f = h - i
+            if i == 0:
+                color = ti.Vector([1.0, f, 0.0])
+            elif i == 1:
+                color = ti.Vector([1.0 - f, 1.0, 0.0])
+            elif i == 2:
+                color = ti.Vector([0.0, 1.0, f])
+            elif i == 3:
+                color = ti.Vector([0.0, 1.0 - f, 1.0])
+            elif i == 4:
+                color = ti.Vector([f, 0.0, 1.0])
+            else:
+                color = ti.Vector([1.0, 0.0, 1.0 - f])
+        elif mode == 2:  # Cool-Warm (青→白→赤)
+            if t < 0.5:
+                s = t * 2.0
+                color = ti.Vector([s, s, 1.0])
+            else:
+                s = (t - 0.5) * 2.0
+                color = ti.Vector([1.0, 1.0 - s, 1.0 - s])
+        elif mode == 3:  # Viridis風
+            color = ti.Vector([
+                0.267 + t * 0.6,
+                0.004 + t * 0.87,
+                0.329 + t * 0.3 - t * t * 0.5
+            ])
+        
+        return color
+
     @ti.kernel
     def init_particles(self):
         for i in range(self.num_particles):
@@ -103,6 +153,10 @@ class FluidSolver:
             ])
             self.particle_life[i] = ti.random()
             self.particle_absorbed[i] = 0  # 初期状態は吸い込まれていない
+            self.trail_index[i] = 0
+            # トレイル履歴を初期化
+            for j in range(self.trail_length):
+                self.trail_positions[i, j] = self.particle_pos[i]
 
     @ti.kernel
     def advect(self):
@@ -470,18 +524,18 @@ class FluidSolver:
                         # Inlet pipe (green)
                         self.particle_color[i] = ti.Vector([0.0, 1.0, 0.5])
                 else:
-                    # Inside Tank: Speed-based color
+                    # Inside Tank: Speed-based color with colormap
                     speed = vel.norm()
                     max_v = ti.max(50.0, self.inlet_velocity[None])
                     t = ti.min(speed / max_v, 1.0)
                     
-                    # Blue (Slow) -> Red (Fast)
-                    self.particle_color[i] = ti.Vector([
-                        t,           # R
-                        t * 0.5,     # G
-                        1.0 - t      # B
-                    ])
+                    self.particle_color[i] = self.apply_colormap(t)
             # else: 吸い込まれた粒子は色をそのまま維持（マゼンタ）
+            
+            # トレイル更新
+            idx = self.trail_index[i]
+            self.trail_positions[i, idx] = p_next
+            self.trail_index[i] = (idx + 1) % self.trail_length
 
 
     def step(self):
