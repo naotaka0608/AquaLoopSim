@@ -49,6 +49,7 @@ class FluidSolver:
         self.particle_vel = ti.Vector.field(3, dtype=float, shape=self.num_particles)
         self.particle_color = ti.Vector.field(3, dtype=float, shape=self.num_particles)
         self.particle_life = ti.field(dtype=float, shape=self.num_particles)
+        self.particle_absorbed = ti.field(dtype=int, shape=self.num_particles)  # 吸い込まれたかどうかのフラグ
 
         self.init_particles()
         
@@ -101,6 +102,7 @@ class FluidSolver:
                 ti.random() * self.res[2]
             ])
             self.particle_life[i] = ti.random()
+            self.particle_absorbed[i] = 0  # 初期状態は吸い込まれていない
 
     @ti.kernel
     def advect(self):
@@ -453,37 +455,33 @@ class FluidSolver:
             self.particle_pos[i] = p_next
             
             # Color update
-            # Fix Z-check for coloring
-            # And use dynamic velocity scaling for visualization
+            # 一度吸い込まれた粒子は色を変えない
             
-            is_pipe_colored = False
-            
-            if p_next[0] < 0:
-                # Check Inlet
-                if abs(p_next[1] - self.inlet_y[None]) < (self.inlet_radius[None] * 1.5) and abs(p_next[2] - self.inlet_z[None]) < (self.inlet_radius[None] * 1.5):
-                     self.particle_color[i] = ti.Vector([0.0, 1.0, 0.5]) # Green
-                     is_pipe_colored = True
-                # Check Outlet
-                elif abs(p_next[1] - self.outlet_y[None]) < (self.outlet_radius[None] * 1.5) and abs(p_next[2] - self.outlet_z[None]) < (self.outlet_radius[None] * 1.5):
-                     self.particle_color[i] = ti.Vector([1.0, 0.0, 1.0]) # Magenta
-                     is_pipe_colored = True
-            
-            if not is_pipe_colored:
-                # Inside Tank or uncolored pipe void: Speed
-                speed = vel.norm()
+            if self.particle_absorbed[i] == 0:
+                # まだ吸い込まれていない粒子のみ色を更新
                 
-                # Dynamic scaling: Use inlet_velocity as a reference for "High Speed"
-                # But inlet_velocity can be very high.
-                # Let's cap max visual speed at e.g. 150 or inlet_velocity * 1.5
-                max_v = ti.max(50.0, self.inlet_velocity[None])
-                t = ti.min(speed / max_v, 1.0)
-                
-                # Blue (Slow) -> White (Mid) -> Red (Fast)
-                self.particle_color[i] = ti.Vector([
-                    t,           # R
-                    t * 0.5,     # G
-                    1.0 - t      # B
-                ])
+                # Check if entering outlet (being absorbed)
+                if p_next[0] < 0:
+                    if abs(p_next[1] - self.outlet_y[None]) < (self.outlet_radius[None] * 1.5) and abs(p_next[2] - self.outlet_z[None]) < (self.outlet_radius[None] * 1.5):
+                        # 吸い込まれた！フラグを立てて色を変える
+                        self.particle_absorbed[i] = 1
+                        self.particle_color[i] = ti.Vector([1.0, 0.0, 1.0])  # Magenta
+                    elif abs(p_next[1] - self.inlet_y[None]) < (self.inlet_radius[None] * 1.5) and abs(p_next[2] - self.inlet_z[None]) < (self.inlet_radius[None] * 1.5):
+                        # Inlet pipe (green)
+                        self.particle_color[i] = ti.Vector([0.0, 1.0, 0.5])
+                else:
+                    # Inside Tank: Speed-based color
+                    speed = vel.norm()
+                    max_v = ti.max(50.0, self.inlet_velocity[None])
+                    t = ti.min(speed / max_v, 1.0)
+                    
+                    # Blue (Slow) -> Red (Fast)
+                    self.particle_color[i] = ti.Vector([
+                        t,           # R
+                        t * 0.5,     # G
+                        1.0 - t      # B
+                    ])
+            # else: 吸い込まれた粒子は色をそのまま維持（マゼンタ）
 
 
     def step(self):

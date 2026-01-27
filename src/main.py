@@ -167,7 +167,7 @@ def main():
                     phi = np.arccos(diff[1] / radius)
                     # Invert Y logic for intuitiveness if needed, but keeping consistent
                     theta += delta[0] * 5.0 
-                    phi -= delta[1] * 5.0
+                    phi += delta[1] * 5.0  # 上下反転
                     phi = np.clip(phi, 0.01, 3.14)
                     camera_pos[0] = camera_target[0] + radius * np.sin(phi) * np.cos(theta)
                     camera_pos[1] = camera_target[1] + radius * np.cos(phi)
