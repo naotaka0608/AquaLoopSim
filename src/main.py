@@ -1,6 +1,8 @@
 import taichi as ti
 import numpy as np
 import dearpygui.dearpygui as dpg
+import os
+import datetime
 from src.config import *
 from src.config import DEFAULT_NUM_PARTICLES, MIN_NUM_PARTICLES, MAX_NUM_PARTICLES
 from src.solver import FluidSolver
@@ -63,6 +65,23 @@ class AppState:
         # 障害物 (8)
         self.obstacles = []  # リスト of {type, x, y, z, size}
         self.show_obstacles = True
+        
+        # 分析ツール (9, 10, 11)
+        # 流量計表示
+        self.show_flow_meter = True
+        self.inlet_particle_count = 0
+        self.outlet_particle_count = 0
+        
+        # 断面ビュー
+        self.show_cross_section = False
+        self.cross_section_axis = 'X'  # X, Y, Z
+        self.cross_section_pos = 50.0  # % (0-100)
+        
+        # スクリーンショット/録画
+        self.screenshot_dir = "./screenshots"
+        self.is_recording = False
+        self.recording_frames = []
+        self.frame_count = 0
 
 state = AppState()
 
@@ -477,8 +496,78 @@ def setup_dpg_ui():
                 indent=10
             )
             dpg.add_spacer(height=10)
+        
+        dpg.add_separator()
+        
+        # 分析ツールセクション (9, 10, 11)
+        with dpg.collapsing_header(label="分析ツール", default_open=True):
+            dpg.add_spacer(height=5)
+            
+            # 流量計表示 (9)
+            dpg.add_checkbox(
+                label="流量計を表示",
+                tag="show_flow_meter_checkbox",
+                default_value=True,
+                callback=lambda s, a: setattr(state, 'show_flow_meter', a),
+                indent=10
+            )
+            dpg.add_text("流入口: 0 粒子/秒", tag="inlet_flow_text", indent=10)
+            dpg.add_text("流出口: 0 粒子/秒", tag="outlet_flow_text", indent=10)
+            dpg.add_text("平均速度: 0.0 mm/s", tag="avg_speed_text", indent=10)
+            
+            dpg.add_spacer(height=10)
+            dpg.add_separator()
+            
+            # 断面ビュー (10)
+            dpg.add_checkbox(
+                label="断面ビューを表示",
+                tag="show_cross_section_checkbox",
+                default_value=False,
+                callback=lambda s, a: setattr(state, 'show_cross_section', a),
+                indent=10
+            )
+            dpg.add_text("断面軸:", indent=10)
+            dpg.add_radio_button(
+                items=["X", "Y", "Z"],
+                tag="cross_section_axis_radio",
+                default_value="X",
+                horizontal=True,
+                callback=lambda s, a: setattr(state, 'cross_section_axis', a),
+                indent=10
+            )
+            with dpg.group(horizontal=True):
+                dpg.add_text("位置 (%)", indent=10)
+                dpg.add_slider_float(
+                    tag="cross_section_pos_slider",
+                    default_value=50.0,
+                    min_value=0.0,
+                    max_value=100.0,
+                    width=150,
+                    callback=lambda s, a: setattr(state, 'cross_section_pos', a)
+                )
+            
+            dpg.add_spacer(height=10)
+            dpg.add_separator()
+            
+            # スクリーンショット/録画 (11)
+            dpg.add_text("スクリーンショット/録画", indent=10)
+            with dpg.group(horizontal=True):
+                dpg.add_button(
+                    label="📷 スクリーンショット",
+                    callback=lambda: take_screenshot(),
+                    width=140
+                )
+                dpg.add_button(
+                    label="🔴 録画開始",
+                    tag="record_button",
+                    callback=lambda: toggle_recording(),
+                    width=100
+                )
+            dpg.add_text("保存先: ./screenshots", tag="save_path_text", indent=10)
+            dpg.add_text("フレーム: 0", tag="frame_count_text", indent=10)
+            dpg.add_spacer(height=10)
     
-    dpg.create_viewport(title='Fluid Simulation - Control Panel', width=460, height=950, x_pos=50, y_pos=20)
+    dpg.create_viewport(title='Fluid Simulation - Control Panel', width=460, height=1000, x_pos=50, y_pos=10)
     dpg.setup_dearpygui()
     dpg.show_viewport()
     dpg.set_primary_window("main_window", True)
@@ -519,6 +608,82 @@ def clear_obstacles():
     dpg.set_value("obstacle_count_text", f"配置済み障害物: 0個")
 
 
+# グローバル変数（録画用）
+_window_ref = None
+
+
+def take_screenshot():
+    """スクリーンショットを保存"""
+    global _window_ref
+    if _window_ref is None:
+        print("ウィンドウが初期化されていません")
+        return
+    
+    # ディレクトリを確保
+    os.makedirs(state.screenshot_dir, exist_ok=True)
+    
+    # ファイル名を生成
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{state.screenshot_dir}/screenshot_{timestamp}.png"
+    
+    try:
+        _window_ref.save_image(filename)
+        dpg.set_value("save_path_text", f"保存: {filename}")
+        print(f"スクリーンショットを保存: {filename}")
+    except Exception as e:
+        print(f"スクリーンショット保存エラー: {e}")
+
+
+def toggle_recording():
+    """録画開始/停止を切り替え"""
+    state.is_recording = not state.is_recording
+    
+    if state.is_recording:
+        dpg.set_item_label("record_button", "⏹ 停止")
+        state.frame_count = 0
+        os.makedirs(state.screenshot_dir, exist_ok=True)
+        dpg.set_value("save_path_text", "録画中...")
+    else:
+        dpg.set_item_label("record_button", "🔴 録画開始")
+        dpg.set_value("save_path_text", f"録画完了: {state.frame_count}フレーム")
+
+
+def save_recording_frame():
+    """録画中のフレームを保存"""
+    global _window_ref
+    if _window_ref is None or not state.is_recording:
+        return
+    
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{state.screenshot_dir}/frame_{timestamp}_{state.frame_count:05d}.png"
+    
+    try:
+        _window_ref.save_image(filename)
+        state.frame_count += 1
+        dpg.set_value("frame_count_text", f"フレーム: {state.frame_count}")
+    except:
+        pass
+
+
+def calculate_flow_stats(solver, res_x, res_y, res_z):
+    """流量統計を計算"""
+    positions = solver.particle_pos.to_numpy()
+    velocities = solver.particle_vel.to_numpy()
+    
+    # 入口近くの粒子数（X < 5）
+    inlet_mask = positions[:, 0] < 5
+    inlet_count = np.sum(inlet_mask)
+    
+    # 出口近くの粒子数（X < 0）
+    outlet_mask = positions[:, 0] < 0
+    outlet_count = np.sum(outlet_mask)
+    
+    # 平均速度
+    speeds = np.linalg.norm(velocities, axis=1)
+    avg_speed = np.mean(speeds) * SCALE  # mm/s に変換
+    
+    return inlet_count, outlet_count, avg_speed
+
 def main():
     # DearPyGui UIをセットアップ
     setup_dpg_ui()
@@ -555,6 +720,13 @@ def main():
     camera_target = np.array([res_x / 2.0, res_y / 2.0, res_z / 2.0], dtype=np.float32)
     camera_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
     last_mouse_pos = None
+    
+    # グローバル参照を設定
+    global _window_ref
+    _window_ref = window
+    
+    # 流量計用のカウンター
+    flow_update_counter = 0
     
     # メインループ
     while window.running and dpg.is_dearpygui_running():
@@ -625,6 +797,22 @@ def main():
             for _ in range(steps_per_frame):
                 solver.step()
         
+        # 流量計更新（10フレームごと）
+        flow_update_counter += 1
+        if state.show_flow_meter and flow_update_counter >= 10:
+            flow_update_counter = 0
+            inlet_count, outlet_count, avg_speed = calculate_flow_stats(solver, res_x, res_y, res_z)
+            try:
+                dpg.set_value("inlet_flow_text", f"流入口: {inlet_count} 粒子")
+                dpg.set_value("outlet_flow_text", f"流出口: {outlet_count} 粒子")
+                dpg.set_value("avg_speed_text", f"平均速度: {avg_speed:.1f} mm/s")
+            except:
+                pass
+        
+        # 録画フレーム保存
+        if state.is_recording:
+            save_recording_frame()
+
         # Camera Control
         curr_mouse_pos = np.array(window.get_cursor_pos())
         
@@ -726,6 +914,48 @@ def main():
                 if len(trail_points) >= 2:
                     for k in range(len(trail_points) - 1):
                         pass  # Taichi UIでは動的なライン数描画が難しいため、パーティクルで代用
+        
+        # 断面ビュー描画
+        if state.show_cross_section:
+            # 断面位置を計算
+            if state.cross_section_axis == 'X':
+                pos = res_x * state.cross_section_pos / 100.0
+                # YZ平面の矩形
+                section_verts = np.array([
+                    [pos, 0, 0],
+                    [pos, res_y, 0],
+                    [pos, res_y, res_z],
+                    [pos, 0, res_z],
+                    [pos, 0, 0]
+                ], dtype=np.float32)
+            elif state.cross_section_axis == 'Y':
+                pos = res_y * state.cross_section_pos / 100.0
+                # XZ平面の矩形
+                section_verts = np.array([
+                    [0, pos, 0],
+                    [res_x, pos, 0],
+                    [res_x, pos, res_z],
+                    [0, pos, res_z],
+                    [0, pos, 0]
+                ], dtype=np.float32)
+            else:  # Z
+                pos = res_z * state.cross_section_pos / 100.0
+                # XY平面の矩形
+                section_verts = np.array([
+                    [0, 0, pos],
+                    [res_x, 0, pos],
+                    [res_x, res_y, pos],
+                    [0, res_y, pos],
+                    [0, 0, pos]
+                ], dtype=np.float32)
+            
+            section_field = ti.Vector.field(3, dtype=float, shape=5)
+            section_field.from_numpy(section_verts)
+            section_indices = ti.field(dtype=int, shape=8)
+            for i in range(4):
+                section_indices[2*i] = i
+                section_indices[2*i+1] = i + 1
+            scene.lines(section_field, indices=section_indices, color=(1.0, 1.0, 0.0), width=3.0)
         
         canvas.scene(scene)
         window.show()
