@@ -36,6 +36,7 @@ class AppState:
         
         # 視覚化設定
         self.colormap_mode = 0  # 0=Blue-Red, 1=Rainbow, 2=Cool-Warm, 3=Viridis
+        self.background_color_mode = "Black" # Black, Dark Gray, Light Gray, White, Paraview Blue
         self.particle_size = 8.0 # PyVista uses point size, not radius
         self.show_trails = False
         self.show_tank_walls = True
@@ -98,6 +99,7 @@ class AppState:
             'is_sync': self.is_sync,
             'target_num_particles': self.target_num_particles,
             'colormap_mode': self.colormap_mode,
+            'background_color_mode': self.background_color_mode,
             'particle_size': self.particle_size,
             'show_tank_walls': self.show_tank_walls,
             'sim_speed': self.sim_speed,
@@ -425,6 +427,17 @@ def _create_visualization_section():
             default_value="青→赤",
             horizontal=True,
             callback=lambda s, a: setattr(state, 'colormap_mode', ["青→赤", "レインボー", "クールウォーム", "Viridis"].index(a)),
+            indent=10
+        )
+        dpg.add_spacer(height=5)
+        # 背景色選択
+        dpg.add_text("背景色", indent=10)
+        dpg.add_combo(
+            items=["Black", "Dark Gray", "Light Gray", "White", "Paraview Blue"],
+            tag="background_color_combo",
+            default_value=state.background_color_mode,
+            callback=lambda s, a: setattr(state, 'background_color_mode', a),
+            width=200,
             indent=10
         )
         dpg.add_spacer(height=5)
@@ -860,6 +873,7 @@ def main():
 
     # 前回のパーティクルサイズを記録
     last_particle_size = state.particle_size
+    last_background_mode = state.background_color_mode
     
     # ローディング画面を削除
     dpg.delete_item(loading_tag)
@@ -872,6 +886,20 @@ def main():
             
             # PyVistaのイベント処理（描画更新含む）
             plotter.update()
+
+            # 背景色の更新反映
+            if state.background_color_mode != last_background_mode:
+                bg_map = {
+                    "Black": "black",
+                    "Dark Gray": (0.2, 0.2, 0.2),
+                    "Light Gray": (0.8, 0.8, 0.8),
+                    "White": "white",
+                    "Paraview Blue": (0.3, 0.3, 0.4)
+                }
+                new_color = bg_map.get(state.background_color_mode, "black")
+                plotter.set_background(new_color)
+                # 白背景の場合は文字色を黒にすると親切だが、今回は背景のみ
+                last_background_mode = state.background_color_mode
 
             # パーティクルサイズの更新反映
             if state.particle_size != last_particle_size:
