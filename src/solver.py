@@ -6,7 +6,7 @@ from numba import njit, prange
 from src.config import *
 
 
-@njit
+@njit(cache=True)
 def apply_colormap(t, mode):
     """カラーマップを適用 (t: 0.0~1.0)"""
     r, g, b = 0.0, 0.0, 0.0
@@ -44,7 +44,7 @@ def apply_colormap(t, mode):
     return r, g, b
 
 
-@njit
+@njit(cache=True)
 def trilinear_interp(velocity, base_x, base_y, base_z, frac_x, frac_y, frac_z, res):
     """三線形補間"""
     # 境界チェック
@@ -77,7 +77,7 @@ def trilinear_interp(velocity, base_x, base_y, base_z, frac_x, frac_y, frac_z, r
     return result
 
 
-@njit
+@njit(cache=True)
 def sample_velocity_single(velocity, pos, res, inlet_y, inlet_z, inlet_radius, inlet_velocity,
                            outlet_y, outlet_z, outlet_radius, outlet_velocity):
     """単一位置での速度サンプリング"""
@@ -109,7 +109,7 @@ def sample_velocity_single(velocity, pos, res, inlet_y, inlet_z, inlet_radius, i
     return vel
 
 
-@njit(parallel=True)
+@njit(cache=True, parallel=True)
 def init_particles_kernel(particle_pos, particle_vel, particle_color, particle_life, 
                           particle_absorbed, trail_positions, trail_index, res, num_particles, trail_length):
     """粒子初期化カーネル"""
@@ -128,11 +128,11 @@ def init_particles_kernel(particle_pos, particle_vel, particle_color, particle_l
         particle_vel[i, 1] = 0.0
         particle_vel[i, 2] = 0.0
         particle_color[i, 0] = 0.0
-        particle_color[i, 1] = 0.5
+        particle_color[i, 1] = 1.0
         particle_color[i, 2] = 1.0
 
 
-@njit(parallel=True)
+@njit(cache=True, parallel=True)
 def advect_kernel(velocity, new_velocity, dt, res, inlet_y, inlet_z, inlet_radius, inlet_velocity,
                   outlet_y, outlet_z, outlet_radius, outlet_velocity):
     """速度場の移流"""
@@ -148,7 +148,7 @@ def advect_kernel(velocity, new_velocity, dt, res, inlet_y, inlet_z, inlet_radiu
                 new_velocity[i, j, k, 2] = val[2]
 
 
-@njit(parallel=True)
+@njit(cache=True, parallel=True)
 def apply_inlet_boundary_kernel(velocity, res, inlet_y, inlet_z, inlet_radius, inlet_velocity,
                                 outlet_y, outlet_z, outlet_radius, outlet_velocity):
     """境界条件適用"""
@@ -172,7 +172,7 @@ def apply_inlet_boundary_kernel(velocity, res, inlet_y, inlet_z, inlet_radius, i
                     velocity[i, j, k, 2] = 0.0
 
 
-@njit(parallel=True)
+@njit(cache=True, parallel=True)
 def apply_walls_kernel(velocity, res, inlet_y, inlet_z, inlet_radius, outlet_y, outlet_z, outlet_radius):
     """壁境界条件"""
     for i in prange(res[0]):
@@ -198,7 +198,7 @@ def apply_walls_kernel(velocity, res, inlet_y, inlet_z, inlet_radius, outlet_y, 
                     velocity[i, j, k, 2] = 0.0
 
 
-@njit(parallel=True)
+@njit(cache=True, parallel=True)
 def divergence_calc_kernel(velocity, divergence, res):
     """発散計算"""
     for i in prange(res[0]):
@@ -213,7 +213,7 @@ def divergence_calc_kernel(velocity, divergence, res):
                 divergence[i, j, k] = 0.5 * (r - l + u - d + f - b)
 
 
-@njit(parallel=True)
+@njit(cache=True, parallel=True)
 def pressure_jacobi_kernel(pressure, new_pressure, divergence, res):
     """圧力ヤコビ反復"""
     for i in prange(res[0]):
@@ -228,7 +228,7 @@ def pressure_jacobi_kernel(pressure, new_pressure, divergence, res):
                 new_pressure[i, j, k] = (pl + pr + pd + pu + pb + pf - divergence[i, j, k]) / 6.0
 
 
-@njit(parallel=True)
+@njit(cache=True, parallel=True)
 def project_kernel(velocity, pressure, res):
     """圧力投影"""
     for i in prange(res[0]):
@@ -246,7 +246,7 @@ def project_kernel(velocity, pressure, res):
                 velocity[i, j, k, 2] -= 0.5 * (pf - pb)
 
 
-@njit(parallel=True)
+@njit(cache=True, parallel=True)
 def advect_particles_kernel(particle_pos, particle_vel, particle_color, particle_absorbed,
                             trail_positions, trail_index, velocity, res, dt,
                             inlet_y, inlet_z, inlet_radius, inlet_velocity,

@@ -36,7 +36,7 @@ class AppState:
         
         # 視覚化設定
         self.colormap_mode = 0  # 0=Blue-Red, 1=Rainbow, 2=Cool-Warm, 3=Viridis
-        self.particle_size = 5.0 # PyVista uses point size, not radius
+        self.particle_size = 8.0 # PyVista uses point size, not radius
         self.show_trails = False
         self.show_tank_walls = True
         
@@ -433,9 +433,9 @@ def _create_visualization_section():
             dpg.add_text("粒子サイズ", indent=10)
             dpg.add_slider_float(
                 tag="particle_size_slider",
-                default_value=0.5,
-                min_value=0.1,
-                max_value=2.0,
+                default_value=state.particle_size,
+                min_value=1.0,
+                max_value=30.0,
                 width=150,
                 format="%.2f",
                 callback=lambda s, a: setattr(state, 'particle_size', a)
@@ -780,6 +780,18 @@ def main():
     # DearPyGui UIをセットアップ
     setup_dpg_ui()
     
+    # ローディング画面を表示（最前面）
+    loading_tag = "loading_overlay"
+    with dpg.window(label="Loading", tag=loading_tag, modal=True, no_title_bar=True, no_move=True, width=400, height=150, pos=(60, 300)):
+        dpg.add_text("システム初期化中...", indent=130)
+        dpg.add_text("※ 初回起動は最適化処理のため時間がかかります。\n(10秒〜20秒程度お待ちください)", indent=30)
+        dpg.add_spacer(height=10)
+        dpg.add_loading_indicator(style=1, radius=6.0, color=(100, 200, 255, 255), indent=185)
+    
+    # ローディング画面を確実に描画させる
+    for _ in range(10):
+        dpg.render_dearpygui_frame()
+
     # Physics Init
     res_x = int(state.tank_width / SCALE)
     res_y = int(state.tank_height / SCALE)
@@ -800,6 +812,14 @@ def main():
         state.inlet_z_mm/SCALE, state.outlet_z_mm/SCALE,
         state.inlet_flow, state.outlet_flow
     )
+    
+    # Numba JITコンパイルのウォームアップ
+    # これを行うことで、メインループ開始時のフリーズを防ぐ
+    print("Warming up solver (JIT compilation)...")
+    try:
+        solver.step()
+    except Exception as e:
+        print(f"Warmup failed (non-fatal): {e}")
 
     # PyVista GUI Setup
     plotter = pv.Plotter(title="3D View", window_size=(1000, 800))
@@ -840,6 +860,9 @@ def main():
 
     # 前回のパーティクルサイズを記録
     last_particle_size = state.particle_size
+    
+    # ローディング画面を削除
+    dpg.delete_item(loading_tag)
     
     # メインループ
     try:
