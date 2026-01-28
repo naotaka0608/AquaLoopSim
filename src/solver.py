@@ -600,3 +600,28 @@ class FluidSolver:
         self.project()
         self.apply_inlet_boundary()
         self.advect_particles()
+
+    def update_dimensions(self, res_x, res_y, res_z):
+        """グリッド解像度を更新"""
+        self.res = np.array([res_x, res_y, res_z], dtype=np.int32)
+        # グリッド配列の再確保
+        self.velocity = np.zeros((res_x, res_y, res_z, 3), dtype=np.float64)
+        self.new_velocity = np.zeros((res_x, res_y, res_z, 3), dtype=np.float64)
+        self.pressure = np.zeros((res_x, res_y, res_z), dtype=np.float64)
+        self.new_pressure = np.zeros((res_x, res_y, res_z), dtype=np.float64)
+        self.divergence = np.zeros((res_x, res_y, res_z), dtype=np.float64)
+
+    def update_particle_count(self, num_particles):
+        """粒子数を更新"""
+        self.num_particles = num_particles
+        # 粒子配列の再確保
+        self.particle_pos = np.zeros((num_particles, 3), dtype=np.float64)
+        self.particle_vel = np.zeros((num_particles, 3), dtype=np.float64)
+        self.particle_color = np.zeros((num_particles, 3), dtype=np.float64)
+        self.particle_life = np.zeros(num_particles, dtype=np.float64)
+        self.particle_absorbed = np.zeros(num_particles, dtype=np.int32)
+        
+        self.trail_positions = np.zeros((num_particles, self.trail_length, 3), dtype=np.float64)
+        self.trail_index = np.zeros(num_particles, dtype=np.int32)
+        
+        self.init_particles()
