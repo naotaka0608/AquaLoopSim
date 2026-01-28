@@ -333,17 +333,7 @@ def create_labeled_slider_with_input(label, tag_base, default_val, min_val, max_
         )
     dpg.add_spacer(height=3)
 
-def _create_config_section():
-    """設定保存/読み込みセクション"""
-    with dpg.group(horizontal=True):
-        dpg.add_button(label="Save", callback=lambda: on_save_config(), width=100)
-        dpg.add_spacer(width=5)
-        dpg.add_button(label="Load", callback=lambda: on_load_config(), width=100)
-        dpg.add_spacer(width=5)
-        dpg.add_button(label="Reset", callback=on_reset_particles, width=100)
-    dpg.add_text("", tag="config_status_text")
-    dpg.add_spacer(height=5)
-    dpg.add_separator()
+
 
 
 def _create_tank_section():
@@ -475,13 +465,16 @@ def _create_visualization_section():
 
 def _create_simulation_control_section():
     """シミュレーション制御セクション"""
-    with dpg.collapsing_header(label="シミュレーション制御", default_open=False):
+    with dpg.collapsing_header(label="シミュレーション制御", default_open=True):
         dpg.add_spacer(height=5)
-        # 一時停止/再生ボタン
+        # 一時停止/再生ボタン + リセットボタン
         with dpg.group(horizontal=True):
-            dpg.add_button(label="Pause", tag="pause_button", callback=lambda: toggle_pause(), width=120)
+            dpg.add_button(label="Pause", tag="pause_button", callback=lambda: toggle_pause(), width=100)
             dpg.add_spacer(width=15)
             dpg.add_text("Playing", tag="pause_status_text")
+            dpg.add_spacer(width=15)
+            dpg.add_button(label="Reset", callback=on_reset_particles, width=100)
+        
         dpg.add_spacer(height=5)
         # シミュレーション速度
         dpg.add_text("シミュレーション速度", indent=10)
@@ -497,6 +490,15 @@ def _create_simulation_control_section():
         # 経過時間表示
         dpg.add_text("経過時間: 0.0 秒", tag="elapsed_time_text", indent=10)
         dpg.add_spacer(height=10)
+        
+        # 設定保存/読み込み (経過時間の下に配置)
+        with dpg.group(horizontal=True):
+            dpg.add_button(label="Save", callback=lambda: on_save_config(), width=100, indent=10)
+            dpg.add_spacer(width=10)
+            dpg.add_button(label="Load", callback=lambda: on_load_config(), width=100)
+        dpg.add_text("", tag="config_status_text", indent=10)
+        dpg.add_spacer(height=5)
+
     dpg.add_separator()
 
 
@@ -661,13 +663,14 @@ def setup_dpg_ui():
     
     # メインウィンドウ
     with dpg.window(label="Control Panel", tag="main_window", width=500, height=800, no_close=True):
-        _create_config_section()
+        _create_simulation_control_section()
+        # _create_config_section() configセクションはsimulation制御に統合されたため削除
         _create_tank_section()
         _create_inlet_section()
         _create_outlet_section()
         _create_particle_section()
         _create_visualization_section()
-        _create_simulation_control_section()
+        # _create_simulation_control_section() は上に移動したため削除
         _create_additional_ports_section()
         _create_obstacles_section()
         _create_analysis_section()
