@@ -770,17 +770,30 @@ def save_recording_frame():
         pass
 
 
-def calculate_flow_stats(solver, res_x, res_y, res_z):
+def calculate_flow_stats(solver, res_x, res_y, res_z, 
+                         inlet_y, inlet_z, inlet_r,
+                         outlet_y, outlet_z, outlet_r):
     """流量統計を計算"""
-    positions = solver.particle_pos.to_numpy()
-    velocities = solver.particle_vel.to_numpy()
+    positions = solver.particle_pos
+    velocities = solver.particle_vel
     
-    # 入口近くの粒子数（X < 5）
-    inlet_mask = positions[:, 0] < 5
+    # X座標チェック (壁際)
+    x_mask = positions[:, 0] < 5.0
+    
+    # YZ距離の二乗計算
+    # Inlet
+    dy_in = positions[:, 1] - inlet_y
+    dz_in = positions[:, 2] - inlet_z
+    dist_sq_in = dy_in*dy_in + dz_in*dz_in
+    inlet_mask = np.logical_and(x_mask, dist_sq_in < (inlet_r * inlet_r))
+    
+    # Outlet
+    dy_out = positions[:, 1] - outlet_y
+    dz_out = positions[:, 2] - outlet_z
+    dist_sq_out = dy_out*dy_out + dz_out*dz_out
+    outlet_mask = np.logical_and(x_mask, dist_sq_out < (outlet_r * outlet_r))
+    
     inlet_count = np.sum(inlet_mask)
-    
-    # 出口近くの粒子数（X < 0）
-    outlet_mask = positions[:, 0] < 0
     outlet_count = np.sum(outlet_mask)
     
     # 平均速度
@@ -841,7 +854,7 @@ def main():
     # 粒子メッシュ初期化
     particles_mesh = pv.PolyData(solver.particle_pos)
     particles_mesh.point_data["rgb"] = solver.particle_color
-    particles_actor = plotter.add_mesh(particles_mesh, scalars="rgb", rgb=True, point_size=state.particle_size, render_points_as_spheres=True, lighting=False, name="particles")
+    particles_actor = plotter.add_mesh(particles_mesh, scalars="rgb", rgb=True, point_size=state.particle_size, style='points', render_points_as_spheres=False, name="particles")
     
     # 壁面メッシュ初期化
     if box_mesh:
@@ -918,7 +931,7 @@ def main():
                 # メッシュ再登録
                 particles_mesh = pv.PolyData(solver.particle_pos)
                 particles_mesh.point_data["rgb"] = solver.particle_color
-                particles_actor = plotter.add_mesh(particles_mesh, scalars="rgb", rgb=True, point_size=state.particle_size, render_points_as_spheres=True, lighting=False, name="particles")
+                particles_actor = plotter.add_mesh(particles_mesh, scalars="rgb", rgb=True, point_size=state.particle_size, style='points', render_points_as_spheres=False, name="particles")
                 
                 if box_mesh:
                     plotter.add_mesh(box_mesh, color="white", style="wireframe", line_width=2, name="walls")
@@ -946,7 +959,7 @@ def main():
                     # メッシュ更新
                     particles_mesh = pv.PolyData(solver.particle_pos)
                     particles_mesh.point_data["rgb"] = solver.particle_color
-                    particles_actor = plotter.add_mesh(particles_mesh, scalars="rgb", rgb=True, point_size=state.particle_size, render_points_as_spheres=True, lighting=False, name="particles")
+                    particles_actor = plotter.add_mesh(particles_mesh, scalars="rgb", rgb=True, point_size=state.particle_size, style='points', render_points_as_spheres=False, name="particles")
                     
                     try:
                         dpg.set_value("particle_count_text", f"現在: {state.current_num_particles:,}")
@@ -997,58 +1010,97 @@ def main():
             particles_mesh.points[:] = solver.particle_pos
             particles_mesh.point_data["rgb"][:] = solver.particle_color
             
+            # 断面ビュー更新
+            if particles_actor:
+                if state.show_cross_section:
+                    # クリッピングプレーンの設定
+                    # 中心位置計算
+                    center = [
+                        res_x/2 * SCALE, res_y/2 * SCALE, res_z/2 * SCALE
+                    ]
+                    # GUIの%指定から座標オフセット計算
+                    offset_pct = (state.cross_section_pos - 50.0) / 100.0
+                    
+                    origin = [res_x/2, res_y/2, res_z/2]
+                    normal = [1, 0, 0]
+                    
+                    if state.cross_section_axis == 'X':
+                        origin[0] += res_x * offset_pct
+                        normal = [1, 0, 0]
+                    elif state.cross_section_axis == 'Y':
+                        origin[1] += res_y * offset_pct
+                        normal = [0, 1, 0]
+                    elif state.cross_section_axis == 'Z':
+                        origin[2] += res_z * offset_pct
+                        normal = [0, 0, 1]
+                        
+                    # PyVistaのクリッピング適用
+                    # Mapperに直接適用することで高速に反映
+                    plane = pv.Plane(center=origin, direction=normal)
+                    particles_actor.mapper.RemoveAllClippingPlanes()
+                    particles_actor.mapper.AddClippingPlane(plane)
+                else:
+                     particles_actor.mapper.RemoveAllClippingPlanes()
+
             # 強制再描画
             plotter.render()
         
-        # 経過時間表示更新
-        try:
-            minutes = int(state.sim_elapsed_time // 60)
-            seconds = state.sim_elapsed_time % 60
-            if minutes > 0:
-                dpg.set_value("elapsed_time_text", f"経過時間: {minutes}分 {seconds:.1f}秒")
-            else:
-                dpg.set_value("elapsed_time_text", f"経過時間: {seconds:.1f} 秒")
-        except:
-            pass
-        
-        # 流量計更新
-        flow_update_counter += 1
-        if state.show_flow_meter and flow_update_counter >= 10:
-            flow_update_counter = 0
-            inlet_count, outlet_count, avg_speed = calculate_flow_stats(solver, res_x, res_y, res_z)
+            # 経過時間表示更新
             try:
-                dpg.set_value("inlet_flow_text", f"流入口: {inlet_count} 粒子")
-                dpg.set_value("outlet_flow_text", f"流出口: {outlet_count} 粒子")
-                dpg.set_value("avg_speed_text", f"平均速度: {avg_speed:.1f} mm/s")
+                minutes = int(state.sim_elapsed_time // 60)
+                seconds = state.sim_elapsed_time % 60
+                if minutes > 0:
+                    dpg.set_value("elapsed_time_text", f"経過時間: {minutes}分 {seconds:.1f}秒")
+                else:
+                    dpg.set_value("elapsed_time_text", f"経過時間: {seconds:.1f} 秒")
             except:
                 pass
-        
-        # 録画フレーム保存
-        if state.is_recording:
-            # PyVistaのスクリーンショット機能を使用
-             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-             filename = f"{state.screenshot_dir}/frame_{timestamp}_{state.frame_count:05d}.png"
-             plotter.screenshot(filename)
-             state.frame_count += 1
-             dpg.set_value("frame_count_text", f"Frames: {state.frame_count}")
-        
-        # 障害物描画 (簡易)
-        vis_obstacles_name = "obstacles_vis"
-        if state.show_obstacles and len(state.obstacles) > 0:
-             # 障害物の可視化用マルチブロックを作成（毎フレーム再作成は重いが一旦これで行く）
-             mb = pv.MultiBlock()
-             for obs in state.obstacles:
-                 ox, oy, oz = obs['x']/SCALE, obs['y']/SCALE, obs['z']/SCALE
-                 osize = obs['size']/SCALE
-                 if obs['type'] == 'sphere':
-                     sphere = pv.Sphere(radius=osize, center=(ox, oy, oz))
-                     mb.append(sphere)
-                 else:
-                     cube = pv.Cube(center=(ox, oy, oz), x_length=osize, y_length=osize, z_length=osize)
-                     mb.append(cube)
-             plotter.add_mesh(mb, color="orange", opacity=0.5, name=vis_obstacles_name)
-        else:
-             plotter.remove_actor(vis_obstacles_name)
+            
+            # 流量計更新
+            flow_update_counter += 1
+            if state.show_flow_meter and flow_update_counter >= 10:
+                flow_update_counter = 0
+                inlet_count, outlet_count, avg_speed = calculate_flow_stats(
+                    solver, res_x, res_y, res_z,
+                    state.inlet_y_mm/SCALE, state.inlet_z_mm/SCALE, state.inlet_radius_mm/SCALE,
+                    state.outlet_y_mm/SCALE, state.outlet_z_mm/SCALE, state.outlet_radius_mm/SCALE
+                )
+                try:
+                     dpg.set_value("inlet_flow_text", f"流入口: {inlet_count} 粒子")
+                     dpg.set_value("outlet_flow_text", f"流出口: {outlet_count} 粒子")
+                     dpg.set_value("avg_speed_text", f"平均速度: {avg_speed:.1f} mm/s")
+                except:
+                     pass
+            
+            # 録画フレーム保存
+            if state.is_recording:
+                # PyVistaのスクリーンショット機能を使用
+                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                 filename = f"{state.screenshot_dir}/frame_{timestamp}_{state.frame_count:05d}.png"
+                 plotter.screenshot(filename)
+                 state.frame_count += 1
+                 dpg.set_value("frame_count_text", f"Frames: {state.frame_count}")
+            
+            # 障害物描画 (簡易)
+            vis_obstacles_name = "obstacles_vis"
+            if state.show_obstacles and len(state.obstacles) > 0:
+                 # 障害物の可視化用マルチブロックを作成（毎フレーム再作成は重いが一旦これで行く）
+                 mb = pv.MultiBlock()
+                 for obs in state.obstacles:
+                     ox, oy, oz = obs['x']/SCALE, obs['y']/SCALE, obs['z']/SCALE
+                     osize = obs['size']/SCALE
+                     if obs['type'] == 'sphere':
+                         mesh = pv.Sphere(radius=osize, center=(ox, oy, oz))
+                     else:
+                         mesh = pv.Box(bounds=(ox-osize, ox+osize, oy-osize, oy+osize, oz-osize, oz+osize))
+                     mb.append(mesh)
+                 
+                 # 名前を指定して追加（上書き更新される）
+                 plotter.add_mesh(mb, color="orange", opacity=0.5, name=vis_obstacles_name, reset_camera=False)
+            elif not state.show_obstacles:
+                 # 非表示の場合は削除
+                 plotter.remove_actor(vis_obstacles_name)
+
 
         # 断面プロットなどはPyVistaのクリッピング機能を使うといいが、今回は省略または後で追加
         

@@ -14,7 +14,7 @@
   "target_num_particles": 500000,
   "colormap_mode": 0,
   "background_color_mode": "Light Gray",
-  "particle_size": 4.03000020980835,
+  "particle_size": 2.0799999237060547,
   "show_tank_walls": true,
   "sim_speed": 1.0,
   "use_second_inlet": false,
