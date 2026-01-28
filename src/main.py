@@ -1,18 +1,12 @@
-import taichi as ti
 import numpy as np
 import dearpygui.dearpygui as dpg
 import os
 import json
 import datetime
+import pyvista as pv
 from src.config import *
 from src.config import DEFAULT_NUM_PARTICLES, MIN_NUM_PARTICLES, MAX_NUM_PARTICLES
 from src.solver import FluidSolver
-
-# Initialize Taichi
-try:
-    ti.init(arch=ti.gpu)
-except:
-    ti.init(arch=ti.cpu)
 
 # Global State
 class AppState:
@@ -42,7 +36,7 @@ class AppState:
         
         # 視覚化設定
         self.colormap_mode = 0  # 0=Blue-Red, 1=Rainbow, 2=Cool-Warm, 3=Viridis
-        self.particle_size = 0.5
+        self.particle_size = 5.0 # PyVista uses point size, not radius
         self.show_trails = False
         self.show_tank_walls = True
         
@@ -162,36 +156,37 @@ load_config()
 SCALE = 10.0 
 
 # Scene Data
-box_vertices = ti.Vector.field(3, dtype=float, shape=8)
-box_indices = ti.field(dtype=int, shape=24)
+box_mesh = None
+pipe_mesh = None
 
-# Pipe Data
-MAX_PIPE_VERTS = 1000
-pipe_v_field = ti.Vector.field(3, dtype=float, shape=MAX_PIPE_VERTS)
-pipe_i_field = ti.field(dtype=int, shape=MAX_PIPE_VERTS * 2)
-num_pipe_indices = ti.field(dtype=int, shape=())
 
 def update_box_geometry(res_x, res_y, res_z):
+    global box_mesh
+    # 8 corners
     corners = np.array([
         [0, 0, 0], [res_x, 0, 0], [res_x, 0, res_z], [0, 0, res_z],
         [0, res_y, 0], [res_x, res_y, 0], [res_x, res_y, res_z], [0, res_y, res_z]
     ], dtype=np.float32)
     
+    # 12 edges (2 indices per edge)
+    # PyVista lines format: [2, i0, i1, 2, i2, i3, ...]
     indices = np.array([
         [0, 1], [1, 2], [2, 3], [3, 0],
         [4, 5], [5, 6], [6, 7], [7, 4],
         [0, 4], [1, 5], [2, 6], [3, 7]
     ], dtype=np.int32)
     
-    for i in range(8):
-        box_vertices[i] = ti.Vector(corners[i])
-    for i in range(12):
-        box_indices[2*i] = indices[i, 0]
-        box_indices[2*i+1] = indices[i, 1]
+    # Construct PyVista PolyData
+    # padding lines array with connection count (2)
+    lines_flat = np.hstack([[2, i0, i1] for i0, i1 in indices])
+    
+    box_mesh = pv.PolyData(corners)
+    box_mesh.lines = lines_flat
 
 def update_pipe_geometry(in_y, out_y, in_rad, out_rad, in_z, out_z, res_y, res_z):
+    global pipe_mesh
     verts = []
-    inds = []
+    lines_list = []
     num_pipe_segs = 16
     
     def add_pipe_mesh(start_pos, end_pos, radius):
@@ -200,29 +195,31 @@ def update_pipe_geometry(in_y, out_y, in_rad, out_rad, in_z, out_z, res_y, res_z
             theta = (i / num_pipe_segs) * 2 * np.pi
             y = np.cos(theta) * radius
             z = np.sin(theta) * radius
-            verts.append([start_pos[0], start_pos[1] + y, start_pos[2] + z])
-            verts.append([end_pos[0], end_pos[1] + y, end_pos[2] + z])
+            
+            p1 = [start_pos[0], start_pos[1] + y, start_pos[2] + z]
+            p2 = [end_pos[0], end_pos[1] + y, end_pos[2] + z]
+            
+            verts.append(p1)
+            verts.append(p2)
             
             curr = start_idx + 2*i
             next_seg = start_idx + 2*((i+1)%num_pipe_segs)
             
-            inds.append([curr, next_seg])
-            inds.append([curr+1, next_seg+1])
-            inds.append([curr, curr+1])
+            # Lines: p1-p2 (length of pipe), p1-next_p1 (ring), p2-next_p2 (ring)
+            lines_list.append([2, curr, next_seg])       # Ring 1 segment
+            lines_list.append([2, curr+1, next_seg+1])   # Ring 2 segment
+            lines_list.append([2, curr, curr+1])         # Length segment
 
     add_pipe_mesh([0, in_y, in_z], [-20, in_y, in_z], in_rad)
     add_pipe_mesh([0, out_y, out_z], [-20, out_y, out_z], out_rad)
     
-    count = min(len(verts), MAX_PIPE_VERTS)
-    for i in range(count):
-        pipe_v_field[i] = ti.Vector(verts[i])
-        
-    ind_count = min(len(inds), MAX_PIPE_VERTS)
-    for i in range(ind_count):
-        pipe_i_field[2*i] = inds[i][0]
-        pipe_i_field[2*i+1] = inds[i][1]
-        
-    num_pipe_indices[None] = ind_count * 2
+    if verts:
+        points = np.array(verts, dtype=np.float32)
+        lines_flat = np.hstack(lines_list)
+        pipe_mesh = pv.PolyData(points)
+        pipe_mesh.lines = lines_flat
+    else:
+        pipe_mesh = None
 
 
 # ============ Dear PyGui Callbacks ============
@@ -804,96 +801,153 @@ def main():
         state.inlet_flow, state.outlet_flow
     )
 
-    # Taichi GUI Setup
-    window = ti.ui.Window("3D View", (1000, 800), pos=(500, 50))
-    canvas = window.get_canvas()
-    scene = ti.ui.Scene()
-    camera = ti.ui.Camera()
+    # PyVista GUI Setup
+    plotter = pv.Plotter(title="3D View", window_size=(1000, 800))
+    # plotter.app_window.position = (500, 50) # Removed as it causes AttributeError
     
-    # Camera State
-    camera_pos = np.array([res_x * 1.5, res_y * 1.5, res_z * 2.0], dtype=np.float32)
-    camera_target = np.array([res_x / 2.0, res_y / 2.0, res_z / 2.0], dtype=np.float32)
-    camera_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-    last_mouse_pos = None
+    # 粒子メッシュ初期化
+    particles_mesh = pv.PolyData(solver.particle_pos)
+    particles_mesh.point_data["rgb"] = solver.particle_color
+    particles_actor = plotter.add_mesh(particles_mesh, scalars="rgb", rgb=True, point_size=state.particle_size, render_points_as_spheres=True, lighting=False, name="particles")
     
-    # グローバル参照を設定
+    # 壁面メッシュ初期化
+    if box_mesh:
+        plotter.add_mesh(box_mesh, color="white", style="wireframe", line_width=2, name="walls")
+        
+    # パイプメッシュ初期化
+    if pipe_mesh:
+        plotter.add_mesh(pipe_mesh, color="gray", style="wireframe", line_width=2, name="pipes")
+    
+    # ライトとカメラ設定
+    plotter.add_light(pv.Light(position=(res_x/2, res_y*1.5, res_z/2), color='white', intensity=0.8))
+    plotter.set_background('black')  # 背景を黒に設定
+    plotter.camera_position = [
+        (res_x * 1.5, res_y * 1.5, res_z * 2.0),  # Position
+        (res_x / 2.0, res_y / 2.0, res_z / 2.0),  # Focal point
+        (0.0, 1.0, 0.0)  # Up vector
+    ]
+    plotter.show_axes()
+    
+    # 非ブロッキングで表示
+    plotter.show(interactive_update=True, auto_close=False)
+    
+    # グローバル参照を設定（スクリーンショット用）
     global _window_ref
-    _window_ref = window
+    _window_ref = plotter
     
     # 流量計用のカウンター
     flow_update_counter = 0
+
+    # 前回のパーティクルサイズを記録
+    last_particle_size = state.particle_size
     
     # メインループ
-    while window.running and dpg.is_dearpygui_running():
-        # DearPyGuiのフレームを処理
-        dpg.render_dearpygui_frame()
-        
-        # 寸法更新チェック
-        if state.needs_dimension_update:
-            res_x = int(state.tank_width / SCALE)
-            res_y = int(state.tank_height / SCALE)
-            res_z = int(state.tank_depth / SCALE)
-            solver = FluidSolver(res_x, res_y, res_z, state.current_num_particles)
-            update_box_geometry(res_x, res_y, res_z)
-            camera_target = np.array([res_x/2, res_y/2, res_z/2], dtype=np.float32)
-            camera_pos = camera_target + np.array([res_x, res_y/2, res_z], dtype=np.float32)
-            state.needs_dimension_update = False
-        
-        # 粒子リセットチェック
-        if state.needs_particle_reset:
-            solver.init_particles()
-            state.sim_elapsed_time = 0.0  # 経過時間もリセット
-            state.needs_particle_reset = False
-        
-        # 粒子数更新チェック
-        if state.needs_particle_count_update:
-            if state.target_num_particles != state.current_num_particles:
-                state.current_num_particles = state.target_num_particles
+    try:
+        while not getattr(plotter, 'closed', getattr(plotter, '_closed', False)) and dpg.is_dearpygui_running():
+            # DearPyGuiのフレームを処理
+            dpg.render_dearpygui_frame()
+            
+            # PyVistaのイベント処理（描画更新含む）
+            plotter.update()
+
+            # パーティクルサイズの更新反映
+            if state.particle_size != last_particle_size:
+                if particles_actor:
+                     particles_actor.prop.point_size = state.particle_size
+                last_particle_size = state.particle_size
+            
+            # 寸法更新チェック
+            if state.needs_dimension_update:
+                res_x = int(state.tank_width / SCALE)
+                res_y = int(state.tank_height / SCALE)
+                res_z = int(state.tank_depth / SCALE)
                 solver = FluidSolver(res_x, res_y, res_z, state.current_num_particles)
-                try:
-                    dpg.set_value("particle_count_text", f"現在: {state.current_num_particles:,}")
-                except:
-                    pass
-            state.needs_particle_count_update = False
-        
-        # パイプジオメトリ更新
-        update_pipe_geometry(
-            state.inlet_y_mm/SCALE, state.outlet_y_mm/SCALE, 
-            state.inlet_radius_mm/SCALE, state.outlet_radius_mm/SCALE, 
-            state.inlet_z_mm/SCALE, state.outlet_z_mm/SCALE, 
-            res_y, res_z
-        )
-        
-        # ソルバーパラメータ更新
-        solver.update_params(
-            state.inlet_y_mm/SCALE, state.outlet_y_mm/SCALE, 
-            state.inlet_radius_mm/SCALE, state.outlet_radius_mm/SCALE, 
-            state.inlet_z_mm/SCALE, state.outlet_z_mm/SCALE, 
-            state.inlet_flow, state.outlet_flow
-        )
-        
-        # カラーマップ更新
-        solver.colormap_mode[None] = state.colormap_mode
-        
-        # 障害物データをソルバーに渡す
-        solver.num_obstacles[None] = min(len(state.obstacles), solver.max_obstacles)
-        for i, obs in enumerate(state.obstacles[:solver.max_obstacles]):
-            solver.obstacle_data[i] = [
-                obs['x'] / SCALE,
-                obs['y'] / SCALE,
-                obs['z'] / SCALE,
-                obs['size'] / SCALE,
-                0.0 if obs['type'] == 'sphere' else 1.0
-            ]
-        
-        # シミュレーション実行（一時停止と速度制御）
-        if not state.is_paused:
-            # 速度に応じてステップ数を調整
-            steps_per_frame = max(1, int(state.sim_speed))
-            for _ in range(steps_per_frame):
-                solver.step()
-            # 経過時間を更新（1フレーム = 約1/60秒として概算）
-            state.sim_elapsed_time += (1.0 / 60.0) * state.sim_speed
+                update_box_geometry(res_x, res_y, res_z)
+                
+                # メッシュ再登録
+                particles_mesh = pv.PolyData(solver.particle_pos)
+                particles_mesh.point_data["rgb"] = solver.particle_color
+                particles_actor = plotter.add_mesh(particles_mesh, scalars="rgb", rgb=True, point_size=state.particle_size, render_points_as_spheres=True, lighting=False, name="particles")
+                
+                if box_mesh:
+                    plotter.add_mesh(box_mesh, color="white", style="wireframe", line_width=2, name="walls")
+                
+                # カメラリセット
+                plotter.camera_position = [
+                    (res_x * 1.5, res_y * 1.5, res_z * 2.0),
+                    (res_x / 2.0, res_y / 2.0, res_z / 2.0),
+                    (0.0, 1.0, 0.0)
+                ]
+                state.needs_dimension_update = False
+            
+            # 粒子リセットチェック
+            if state.needs_particle_reset:
+                solver.init_particles()
+                state.sim_elapsed_time = 0.0
+                state.needs_particle_reset = False
+            
+            # 粒子数更新チェック
+            if state.needs_particle_count_update:
+                if state.target_num_particles != state.current_num_particles:
+                    state.current_num_particles = state.target_num_particles
+                    solver = FluidSolver(res_x, res_y, res_z, state.current_num_particles)
+                    
+                    # メッシュ更新
+                    particles_mesh = pv.PolyData(solver.particle_pos)
+                    particles_mesh.point_data["rgb"] = solver.particle_color
+                    particles_actor = plotter.add_mesh(particles_mesh, scalars="rgb", rgb=True, point_size=state.particle_size, render_points_as_spheres=True, lighting=False, name="particles")
+                    
+                    try:
+                        dpg.set_value("particle_count_text", f"現在: {state.current_num_particles:,}")
+                    except:
+                        pass
+                state.needs_particle_count_update = False
+            
+            # パイプジオメトリ更新
+            update_pipe_geometry(
+                state.inlet_y_mm/SCALE, state.outlet_y_mm/SCALE, 
+                state.inlet_radius_mm/SCALE, state.outlet_radius_mm/SCALE, 
+                state.inlet_z_mm/SCALE, state.outlet_z_mm/SCALE, 
+                res_y, res_z
+            )
+            if pipe_mesh:
+                 plotter.add_mesh(pipe_mesh, color="gray", style="wireframe", line_width=2, name="pipes")
+            
+            # ソルバーパラメータ更新
+            solver.update_params(
+                state.inlet_y_mm/SCALE, state.outlet_y_mm/SCALE, 
+                state.inlet_radius_mm/SCALE, state.outlet_radius_mm/SCALE, 
+                state.inlet_z_mm/SCALE, state.outlet_z_mm/SCALE, 
+                state.inlet_flow, state.outlet_flow
+            )
+            
+            # カラーマップ更新 (Numba版では配列ではなくスカラ)
+            solver.colormap_mode = state.colormap_mode
+            
+            # 障害物データをソルバーに渡す (Numba版では配列)
+            solver.num_obstacles = min(len(state.obstacles), solver.max_obstacles)
+            for i, obs in enumerate(state.obstacles[:solver.max_obstacles]):
+                solver.obstacle_data[i] = [
+                    obs['x'] / SCALE,
+                    obs['y'] / SCALE,
+                    obs['z'] / SCALE,
+                    obs['size'] / SCALE,
+                    0.0 if obs['type'] == 'sphere' else 1.0
+                ]
+            
+            # シミュレーション実行
+            if not state.is_paused:
+                steps_per_frame = max(1, int(state.sim_speed))
+                for _ in range(steps_per_frame):
+                    solver.step()
+                state.sim_elapsed_time += (1.0 / 60.0) * state.sim_speed
+            
+            # PyVistaメッシュ更新 (インプレース更新で高速化)
+            particles_mesh.points[:] = solver.particle_pos
+            particles_mesh.point_data["rgb"][:] = solver.particle_color
+            
+            # 強制再描画
+            plotter.render()
         
         # 経過時間表示更新
         try:
@@ -906,7 +960,7 @@ def main():
         except:
             pass
         
-        # 流量計更新（10フレームごと）
+        # 流量計更新
         flow_update_counter += 1
         if state.show_flow_meter and flow_update_counter >= 10:
             flow_update_counter = 0
@@ -920,162 +974,44 @@ def main():
         
         # 録画フレーム保存
         if state.is_recording:
-            save_recording_frame()
-
-        # Camera Control
-        curr_mouse_pos = np.array(window.get_cursor_pos())
+            # PyVistaのスクリーンショット機能を使用
+             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+             filename = f"{state.screenshot_dir}/frame_{timestamp}_{state.frame_count:05d}.png"
+             plotter.screenshot(filename)
+             state.frame_count += 1
+             dpg.set_value("frame_count_text", f"Frames: {state.frame_count}")
         
-        if last_mouse_pos is not None:
-            delta = curr_mouse_pos - last_mouse_pos
-            is_shift = window.is_pressed(ti.ui.SHIFT)
-            
-            if window.is_pressed(ti.ui.RMB):
-                if is_shift:  # Zoom
-                    zoom_speed = 5.0
-                    diff = camera_pos - camera_target
-                    dist = np.linalg.norm(diff)
-                    dir_vec = diff / dist
-                    new_dist = max(1.0, dist + delta[1] * zoom_speed)
-                    camera_pos = camera_target + dir_vec * new_dist
-                else:  # Orbit
-                    diff = camera_pos - camera_target
-                    radius = np.linalg.norm(diff)
-                    theta = np.arctan2(diff[2], diff[0])
-                    phi = np.arccos(diff[1] / radius)
-                    theta += delta[0] * 5.0 
-                    phi += delta[1] * 5.0  # 上下反転
-                    phi = np.clip(phi, 0.01, 3.14)
-                    camera_pos[0] = camera_target[0] + radius * np.sin(phi) * np.cos(theta)
-                    camera_pos[1] = camera_target[1] + radius * np.cos(phi)
-                    camera_pos[2] = camera_target[2] + radius * np.sin(phi) * np.sin(theta)
-            
-            elif window.is_pressed(ti.ui.MMB):  # Pan
-                forward = (camera_target - camera_pos) / np.linalg.norm(camera_target - camera_pos)
-                right = np.cross(forward, camera_up) / np.linalg.norm(np.cross(forward, camera_up))
-                up = np.cross(right, forward)
-                displacement = (right * -delta[0] + up * -delta[1]) * 100.0
-                camera_pos += displacement
-                camera_target += displacement
-                
-        last_mouse_pos = curr_mouse_pos
-        
-        # Rendering
-        camera.position(camera_pos[0], camera_pos[1], camera_pos[2])
-        camera.lookat(camera_target[0], camera_target[1], camera_target[2])
-        camera.up(0, 1, 0)
-        scene.set_camera(camera)
-        
-        scene.point_light(pos=(res_x/2, res_y*1.5, res_z/2), color=(1, 1, 1))
-        scene.ambient_light((0.5, 0.5, 0.5))
-        
-        # 粒子描画（サイズ設定反映）
-        scene.particles(solver.particle_pos, radius=state.particle_size, per_vertex_color=solver.particle_color)
-        
-        # 水槽の壁面表示
-        if state.show_tank_walls:
-            scene.lines(box_vertices, indices=box_indices, color=(1, 1, 1), width=2.0)
-        
-        # パイプ描画
-        scene.lines(pipe_v_field, indices=pipe_i_field, color=(0.8, 0.8, 0.8), width=2.0, vertex_count=num_pipe_indices[None])
-        
-        # 障害物描画
+        # 障害物描画 (簡易)
+        vis_obstacles_name = "obstacles_vis"
         if state.show_obstacles and len(state.obstacles) > 0:
-            for obs in state.obstacles:
-                # グリッド座標に変換
-                ox = obs['x'] / SCALE
-                oy = obs['y'] / SCALE
-                oz = obs['z'] / SCALE
-                osize = obs['size'] / SCALE
-                
-                if obs['type'] == 'sphere':
-                    # 球の簡易描画（パーティクルとして表示）
-                    sphere_center = np.array([[ox, oy, oz]], dtype=np.float32)
-                    sphere_field = ti.Vector.field(3, dtype=float, shape=1)
-                    sphere_field.from_numpy(sphere_center)
-                    scene.particles(sphere_field, radius=osize, color=(0.8, 0.4, 0.1))
-                else:
-                    # 箱の簡易描画（ワイヤーフレーム）
-                    # TODO: 箱のワイヤーフレーム描画
-                    pass
+             # 障害物の可視化用マルチブロックを作成（毎フレーム再作成は重いが一旦これで行く）
+             mb = pv.MultiBlock()
+             for obs in state.obstacles:
+                 ox, oy, oz = obs['x']/SCALE, obs['y']/SCALE, obs['z']/SCALE
+                 osize = obs['size']/SCALE
+                 if obs['type'] == 'sphere':
+                     sphere = pv.Sphere(radius=osize, center=(ox, oy, oz))
+                     mb.append(sphere)
+                 else:
+                     cube = pv.Cube(center=(ox, oy, oz), x_length=osize, y_length=osize, z_length=osize)
+                     mb.append(cube)
+             plotter.add_mesh(mb, color="orange", opacity=0.5, name=vis_obstacles_name)
+        else:
+             plotter.remove_actor(vis_obstacles_name)
+
+        # 断面プロットなどはPyVistaのクリッピング機能を使うといいが、今回は省略または後で追加
         
-        # トレイル描画
-        if state.show_trails:
-            # トレイルデータを取得してライン描画
-            trail_np = solver.trail_positions.to_numpy()
-            trail_idx_np = solver.trail_index.to_numpy()
-            
-            # サンプリング（全粒子だと重いので間引く）
-            sample_step = max(1, state.current_num_particles // 500)
-            for i in range(0, min(500, state.current_num_particles), 1):
-                p_idx = i * sample_step
-                if p_idx >= state.current_num_particles:
-                    break
-                idx = trail_idx_np[p_idx]
-                # トレイルの点を順番に取得
-                trail_points = []
-                for j in range(solver.trail_length):
-                    actual_idx = (idx - j - 1 + solver.trail_length) % solver.trail_length
-                    pos = trail_np[p_idx, actual_idx]
-                    if pos[0] > 0:  # タンク内のみ
-                        trail_points.append(pos)
-                
-                # 線として描画（簡易版）
-                if len(trail_points) >= 2:
-                    for k in range(len(trail_points) - 1):
-                        pass  # Taichi UIでは動的なライン数描画が難しいため、パーティクルで代用
-        
-        # 断面ビュー描画
-        if state.show_cross_section:
-            # 断面位置を計算
-            if state.cross_section_axis == 'X':
-                pos = res_x * state.cross_section_pos / 100.0
-                # YZ平面の矩形
-                section_verts = np.array([
-                    [pos, 0, 0],
-                    [pos, res_y, 0],
-                    [pos, res_y, res_z],
-                    [pos, 0, res_z],
-                    [pos, 0, 0]
-                ], dtype=np.float32)
-            elif state.cross_section_axis == 'Y':
-                pos = res_y * state.cross_section_pos / 100.0
-                # XZ平面の矩形
-                section_verts = np.array([
-                    [0, pos, 0],
-                    [res_x, pos, 0],
-                    [res_x, pos, res_z],
-                    [0, pos, res_z],
-                    [0, pos, 0]
-                ], dtype=np.float32)
-            else:  # Z
-                pos = res_z * state.cross_section_pos / 100.0
-                # XY平面の矩形
-                section_verts = np.array([
-                    [0, 0, pos],
-                    [res_x, 0, pos],
-                    [res_x, res_y, pos],
-                    [0, res_y, pos],
-                    [0, 0, pos]
-                ], dtype=np.float32)
-            
-            section_field = ti.Vector.field(3, dtype=float, shape=4)
-            section_field.from_numpy(section_verts[:4])
-            section_indices = ti.field(dtype=int, shape=8)
-            # 閉じた矩形: 0-1, 1-2, 2-3, 3-0
-            section_indices[0] = 0
-            section_indices[1] = 1
-            section_indices[2] = 1
-            section_indices[3] = 2
-            section_indices[4] = 2
-            section_indices[5] = 3
-            section_indices[6] = 3
-            section_indices[7] = 0
-            scene.lines(section_field, indices=section_indices, color=(1.0, 1.0, 0.0), width=3.0)
-        
-        canvas.scene(scene)
-        window.show()
-    
-    dpg.destroy_context()
+    except Exception as e:
+        print(f"Main loop error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        try:
+            plotter.close()
+        except:
+            pass
+        dpg.destroy_context()
+
 
 if __name__ == "__main__":
     main()

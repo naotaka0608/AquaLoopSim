@@ -1,5 +1,3 @@
-import taichi as ti
-
 # Physical dimensions (mm)
 TANK_WIDTH = 1000
 TANK_DEPTH = 1000
