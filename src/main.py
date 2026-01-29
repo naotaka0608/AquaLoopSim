@@ -15,6 +15,10 @@ class AppState:
         self.tank_height = 500.0
         self.tank_depth = 1000.0
         
+        # 0=Left(X-), 1=Right(X+), 2=Bottom(Y-), 3=Top(Y+)
+        self.inlet_face = 0
+        self.outlet_face = 1
+        
         self.inlet_y_mm = 100.0
         self.inlet_z_mm = 500.0
         self.inlet_radius_mm = 60.0
@@ -88,6 +92,8 @@ class AppState:
             'tank_width': self.tank_width,
             'tank_height': self.tank_height,
             'tank_depth': self.tank_depth,
+            'inlet_face': self.inlet_face,
+            'outlet_face': self.outlet_face,
             'inlet_y_mm': self.inlet_y_mm,
             'inlet_z_mm': self.inlet_z_mm,
             'inlet_radius_mm': self.inlet_radius_mm,
@@ -185,35 +191,78 @@ def update_box_geometry(res_x, res_y, res_z):
     box_mesh = pv.PolyData(corners)
     box_mesh.lines = lines_flat
 
-def update_pipe_geometry(in_y, out_y, in_rad, out_rad, in_z, out_z, res_y, res_z):
+def update_pipe_geometry(inlet_face, outlet_face, in_y, out_y, in_rad, out_rad, in_z, out_z, res_x, res_y, res_z):
+    """パイプジオメトリを更新（配置面に応じた向き）"""
     global pipe_mesh
     verts = []
     lines_list = []
     num_pipe_segs = 16
+    pipe_length = 20
     
     def add_pipe_mesh(start_pos, end_pos, radius):
         start_idx = len(verts)
+        # Determine orientation based on pipe direction
+        direction = np.array(end_pos) - np.array(start_pos)
+        length = np.linalg.norm(direction)
+        if length < 0.01:
+            return
+        direction = direction / length
+        
+        # Find perpendicular vectors
+        if abs(direction[0]) < 0.9:
+            perp1 = np.cross(direction, [1, 0, 0])
+        else:
+            perp1 = np.cross(direction, [0, 1, 0])
+        perp1 = perp1 / np.linalg.norm(perp1)
+        perp2 = np.cross(direction, perp1)
+        
         for i in range(num_pipe_segs):
             theta = (i / num_pipe_segs) * 2 * np.pi
-            y = np.cos(theta) * radius
-            z = np.sin(theta) * radius
+            offset = radius * (np.cos(theta) * perp1 + np.sin(theta) * perp2)
             
-            p1 = [start_pos[0], start_pos[1] + y, start_pos[2] + z]
-            p2 = [end_pos[0], end_pos[1] + y, end_pos[2] + z]
+            p1 = np.array(start_pos) + offset
+            p2 = np.array(end_pos) + offset
             
-            verts.append(p1)
-            verts.append(p2)
+            verts.append(p1.tolist())
+            verts.append(p2.tolist())
             
             curr = start_idx + 2*i
             next_seg = start_idx + 2*((i+1)%num_pipe_segs)
             
-            # Lines: p1-p2 (length of pipe), p1-next_p1 (ring), p2-next_p2 (ring)
-            lines_list.append([2, curr, next_seg])       # Ring 1 segment
-            lines_list.append([2, curr+1, next_seg+1])   # Ring 2 segment
-            lines_list.append([2, curr, curr+1])         # Length segment
-
-    add_pipe_mesh([0, in_y, in_z], [-20, in_y, in_z], in_rad)
-    add_pipe_mesh([0, out_y, out_z], [-20, out_y, out_z], out_rad)
+            lines_list.append([2, curr, next_seg])
+            lines_list.append([2, curr+1, next_seg+1])
+            lines_list.append([2, curr, curr+1])
+    
+    # Inlet pipe position based on face
+    if inlet_face == 0:  # Left (X-)
+        in_start = [0, in_y, in_z]
+        in_end = [-pipe_length, in_y, in_z]
+    elif inlet_face == 1:  # Right (X+)
+        in_start = [res_x, in_y, in_z]
+        in_end = [res_x + pipe_length, in_y, in_z]
+    elif inlet_face == 2:  # Bottom (Y-)
+        in_start = [in_y, 0, in_z]
+        in_end = [in_y, -pipe_length, in_z]
+    else:  # Top (Y+)
+        in_start = [in_y, res_y, in_z]
+        in_end = [in_y, res_y + pipe_length, in_z]
+    
+    # Outlet pipe position based on face
+    if outlet_face == 0:  # Left (X-)
+        out_start = [0, out_y, out_z]
+        out_end = [-pipe_length, out_y, out_z]
+    elif outlet_face == 1:  # Right (X+)
+        out_start = [res_x, out_y, out_z]
+        out_end = [res_x + pipe_length, out_y, out_z]
+    elif outlet_face == 2:  # Bottom (Y-)
+        out_start = [out_y, 0, out_z]
+        out_end = [out_y, -pipe_length, out_z]
+    else:  # Top (Y+)
+        out_start = [out_y, res_y, out_z]
+        out_end = [out_y, res_y + pipe_length, out_z]
+    
+    add_pipe_mesh(in_start, in_end, in_rad)
+    add_pipe_mesh(out_start, out_end, out_rad)
     
     if verts:
         points = np.array(verts, dtype=np.float32)
@@ -351,7 +400,12 @@ def _create_tank_section():
 
 def _create_inlet_section():
     """流入口セクション"""
+    faces = ["0:左(X-)", "1:右(X+)", "2:底(Y-)", "3:上(Y+)"]
     with dpg.collapsing_header(label="流入口 (Inlet)", default_open=False):
+        dpg.add_spacer(height=5)
+        dpg.add_text("設置面")
+        dpg.add_combo(items=faces, tag="inlet_face_combo", default_value=faces[state.inlet_face],
+                     callback=lambda s, a: setattr(state, 'inlet_face', faces.index(a)), width=200)
         dpg.add_spacer(height=5)
         create_labeled_slider_with_input("Y位置 (mm)", "inlet_y", state.inlet_y_mm, 20.0, 450.0)
         create_labeled_slider_with_input("Z位置 (mm)", "inlet_z", state.inlet_z_mm, 20.0, 980.0)
@@ -363,7 +417,12 @@ def _create_inlet_section():
 
 def _create_outlet_section():
     """流出口セクション"""
+    faces = ["0:左(X-)", "1:右(X+)", "2:底(Y-)", "3:上(Y+)"]
     with dpg.collapsing_header(label="流出口 (Outlet)", default_open=False):
+        dpg.add_spacer(height=5)
+        dpg.add_text("設置面")
+        dpg.add_combo(items=faces, tag="outlet_face_combo", default_value=faces[state.outlet_face],
+                     callback=lambda s, a: setattr(state, 'outlet_face', faces.index(a)), width=200)
         dpg.add_spacer(height=5)
         dpg.add_checkbox(label="流入口と同期", tag="sync_checkbox", default_value=state.is_sync, callback=lambda: update_state_from_ui())
         dpg.add_spacer(height=5)
@@ -829,13 +888,15 @@ def main():
     solver = FluidSolver(res_x, res_y, res_z, state.current_num_particles)
     update_box_geometry(res_x, res_y, res_z)
     update_pipe_geometry(
+        state.inlet_face, state.outlet_face,
         state.inlet_y_mm/SCALE, state.outlet_y_mm/SCALE, 
         state.inlet_radius_mm/SCALE, state.outlet_radius_mm/SCALE, 
         state.inlet_z_mm/SCALE, state.outlet_z_mm/SCALE, 
-        res_y, res_z
+        res_x, res_y, res_z
     )
     
     solver.update_params(
+        state.inlet_face, state.outlet_face,
         state.inlet_y_mm/SCALE, state.outlet_y_mm/SCALE, 
         state.inlet_radius_mm/SCALE, state.outlet_radius_mm/SCALE,
         state.inlet_z_mm/SCALE, state.outlet_z_mm/SCALE,
@@ -972,16 +1033,18 @@ def main():
             
             # パイプジオメトリ更新
             update_pipe_geometry(
+                state.inlet_face, state.outlet_face,
                 state.inlet_y_mm/SCALE, state.outlet_y_mm/SCALE, 
                 state.inlet_radius_mm/SCALE, state.outlet_radius_mm/SCALE, 
                 state.inlet_z_mm/SCALE, state.outlet_z_mm/SCALE, 
-                res_y, res_z
+                res_x, res_y, res_z
             )
             if pipe_mesh:
                  plotter.add_mesh(pipe_mesh, color="gray", style="wireframe", line_width=2, name="pipes")
             
             # ソルバーパラメータ更新
             solver.update_params(
+                state.inlet_face, state.outlet_face,
                 state.inlet_y_mm/SCALE, state.outlet_y_mm/SCALE, 
                 state.inlet_radius_mm/SCALE, state.outlet_radius_mm/SCALE, 
                 state.inlet_z_mm/SCALE, state.outlet_z_mm/SCALE, 

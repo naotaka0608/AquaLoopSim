@@ -149,49 +149,129 @@ def advect_kernel(velocity, new_velocity, dt, res, inlet_y, inlet_z, inlet_radiu
 
 
 @njit(cache=True, parallel=True)
-def apply_inlet_boundary_kernel(velocity, res, inlet_y, inlet_z, inlet_radius, inlet_velocity,
+def apply_inlet_boundary_kernel(velocity, res, inlet_face, outlet_face,
+                                inlet_y, inlet_z, inlet_radius, inlet_velocity,
                                 outlet_y, outlet_z, outlet_radius, outlet_velocity):
-    """境界条件適用"""
-    for i in prange(min(5, res[0])):
-        for j in range(res[1]):
-            for k in range(res[2]):
-                dist_z_in = (k - inlet_z) ** 2
-                dist_z_out = (k - outlet_z) ** 2
-                
-                if (j - inlet_y) ** 2 + dist_z_in < inlet_radius ** 2:
-                    velocity[i, j, k, 0] = inlet_velocity
-                    velocity[i, j, k, 1] = 0.0
-                    velocity[i, j, k, 2] = 0.0
-                elif (j - outlet_y) ** 2 + dist_z_out < outlet_radius ** 2:
-                    velocity[i, j, k, 0] = -outlet_velocity
-                    velocity[i, j, k, 1] = 0.0
-                    velocity[i, j, k, 2] = 0.0
-                else:
-                    velocity[i, j, k, 0] = 0.0
-                    velocity[i, j, k, 1] = 0.0
-                    velocity[i, j, k, 2] = 0.0
+    """境界条件適用 (複数面対応)"""
+    # Face 0: Left (X-), Face 1: Right (X+), Face 2: Bottom (Y-), Face 3: Top (Y+)
+    
+    # Inlet boundary
+    if inlet_face == 0:  # Left (X-)
+        for i in prange(min(5, res[0])):
+            for j in range(res[1]):
+                for k in range(res[2]):
+                    if (j - inlet_y) ** 2 + (k - inlet_z) ** 2 < inlet_radius ** 2:
+                        velocity[i, j, k, 0] = inlet_velocity
+                        velocity[i, j, k, 1] = 0.0
+                        velocity[i, j, k, 2] = 0.0
+    elif inlet_face == 1:  # Right (X+)
+        for i in prange(max(0, res[0]-5), res[0]):
+            for j in range(res[1]):
+                for k in range(res[2]):
+                    if (j - inlet_y) ** 2 + (k - inlet_z) ** 2 < inlet_radius ** 2:
+                        velocity[i, j, k, 0] = -inlet_velocity
+                        velocity[i, j, k, 1] = 0.0
+                        velocity[i, j, k, 2] = 0.0
+    elif inlet_face == 2:  # Bottom (Y-)
+        for j in prange(min(5, res[1])):
+            for i in range(res[0]):
+                for k in range(res[2]):
+                    if (i - inlet_y) ** 2 + (k - inlet_z) ** 2 < inlet_radius ** 2:
+                        velocity[i, j, k, 0] = 0.0
+                        velocity[i, j, k, 1] = inlet_velocity
+                        velocity[i, j, k, 2] = 0.0
+    elif inlet_face == 3:  # Top (Y+)
+        for j in prange(max(0, res[1]-5), res[1]):
+            for i in range(res[0]):
+                for k in range(res[2]):
+                    if (i - inlet_y) ** 2 + (k - inlet_z) ** 2 < inlet_radius ** 2:
+                        velocity[i, j, k, 0] = 0.0
+                        velocity[i, j, k, 1] = -inlet_velocity
+                        velocity[i, j, k, 2] = 0.0
+    
+    # Outlet boundary  
+    if outlet_face == 0:  # Left (X-)
+        for i in prange(min(5, res[0])):
+            for j in range(res[1]):
+                for k in range(res[2]):
+                    if (j - outlet_y) ** 2 + (k - outlet_z) ** 2 < outlet_radius ** 2:
+                        velocity[i, j, k, 0] = -outlet_velocity
+                        velocity[i, j, k, 1] = 0.0
+                        velocity[i, j, k, 2] = 0.0
+    elif outlet_face == 1:  # Right (X+)
+        for i in prange(max(0, res[0]-5), res[0]):
+            for j in range(res[1]):
+                for k in range(res[2]):
+                    if (j - outlet_y) ** 2 + (k - outlet_z) ** 2 < outlet_radius ** 2:
+                        velocity[i, j, k, 0] = outlet_velocity
+                        velocity[i, j, k, 1] = 0.0
+                        velocity[i, j, k, 2] = 0.0
+    elif outlet_face == 2:  # Bottom (Y-)
+        for j in prange(min(5, res[1])):
+            for i in range(res[0]):
+                for k in range(res[2]):
+                    if (i - outlet_y) ** 2 + (k - outlet_z) ** 2 < outlet_radius ** 2:
+                        velocity[i, j, k, 0] = 0.0
+                        velocity[i, j, k, 1] = -outlet_velocity
+                        velocity[i, j, k, 2] = 0.0
+    elif outlet_face == 3:  # Top (Y+)
+        for j in prange(max(0, res[1]-5), res[1]):
+            for i in range(res[0]):
+                for k in range(res[2]):
+                    if (i - outlet_y) ** 2 + (k - outlet_z) ** 2 < outlet_radius ** 2:
+                        velocity[i, j, k, 0] = 0.0
+                        velocity[i, j, k, 1] = outlet_velocity
+                        velocity[i, j, k, 2] = 0.0
 
 
 @njit(cache=True, parallel=True)
-def apply_walls_kernel(velocity, res, inlet_y, inlet_z, inlet_radius, outlet_y, outlet_z, outlet_radius):
-    """壁境界条件"""
+def apply_walls_kernel(velocity, res, inlet_face, outlet_face,
+                       inlet_y, inlet_z, inlet_radius, outlet_y, outlet_z, outlet_radius):
+    """壁境界条件 (複数面対応)"""
     for i in prange(res[0]):
         for j in range(res[1]):
             for k in range(res[2]):
+                # X- wall (i=0)
                 if i < 1:
-                    is_inlet = ((j - inlet_y) ** 2 + (k - inlet_z) ** 2 < inlet_radius ** 2)
-                    is_outlet = ((j - outlet_y) ** 2 + (k - outlet_z) ** 2 < outlet_radius ** 2)
-                    if not is_inlet and not is_outlet:
+                    is_hole = False
+                    if inlet_face == 0 and (j - inlet_y) ** 2 + (k - inlet_z) ** 2 < inlet_radius ** 2:
+                        is_hole = True
+                    if outlet_face == 0 and (j - outlet_y) ** 2 + (k - outlet_z) ** 2 < outlet_radius ** 2:
+                        is_hole = True
+                    if not is_hole:
                         velocity[i, j, k, 0] = 0.0
-                        velocity[i, j, k, 1] = 0.0
-                        velocity[i, j, k, 2] = 0.0
                 
+                # X+ wall (i=res[0]-1)
                 if i >= res[0] - 1:
-                    velocity[i, j, k, 0] = 0.0
+                    is_hole = False
+                    if inlet_face == 1 and (j - inlet_y) ** 2 + (k - inlet_z) ** 2 < inlet_radius ** 2:
+                        is_hole = True
+                    if outlet_face == 1 and (j - outlet_y) ** 2 + (k - outlet_z) ** 2 < outlet_radius ** 2:
+                        is_hole = True
+                    if not is_hole:
+                        velocity[i, j, k, 0] = 0.0
+                
+                # Y- wall (j=0)
                 if j < 1:
-                    velocity[i, j, k, 1] = 0.0
+                    is_hole = False
+                    if inlet_face == 2 and (i - inlet_y) ** 2 + (k - inlet_z) ** 2 < inlet_radius ** 2:
+                        is_hole = True
+                    if outlet_face == 2 and (i - outlet_y) ** 2 + (k - outlet_z) ** 2 < outlet_radius ** 2:
+                        is_hole = True
+                    if not is_hole:
+                        velocity[i, j, k, 1] = 0.0
+                
+                # Y+ wall (j=res[1]-1)
                 if j >= res[1] - 1:
-                    velocity[i, j, k, 1] = 0.0
+                    is_hole = False
+                    if inlet_face == 3 and (i - inlet_y) ** 2 + (k - inlet_z) ** 2 < inlet_radius ** 2:
+                        is_hole = True
+                    if outlet_face == 3 and (i - outlet_y) ** 2 + (k - outlet_z) ** 2 < outlet_radius ** 2:
+                        is_hole = True
+                    if not is_hole:
+                        velocity[i, j, k, 1] = 0.0
+                
+                # Z walls (no holes allowed)
                 if k < 1:
                     velocity[i, j, k, 2] = 0.0
                 if k >= res[2] - 1:
@@ -481,6 +561,8 @@ class FluidSolver:
         self.dt = DT
         
         # Parameters
+        self.inlet_face = 0  # 0=Left, 1=Right, 2=Bottom, 3=Top
+        self.outlet_face = 1
         self.inlet_y = 10.0
         self.inlet_z = res_z / 2.0
         self.inlet_radius = 6.0
@@ -521,7 +603,9 @@ class FluidSolver:
         
         self.init_particles()
     
-    def update_params(self, in_y, out_y, in_rad, out_rad, in_z, out_z, in_flow_lpm, out_flow_lpm):
+    def update_params(self, inlet_face, outlet_face, in_y, out_y, in_rad, out_rad, in_z, out_z, in_flow_lpm, out_flow_lpm):
+        self.inlet_face = int(inlet_face)
+        self.outlet_face = int(outlet_face)
         self.inlet_y = float(in_y)
         self.outlet_y = float(out_y)
         self.inlet_radius = float(in_rad)
@@ -561,11 +645,13 @@ class FluidSolver:
     
     def apply_inlet_boundary(self):
         apply_inlet_boundary_kernel(self.velocity, self.res,
+                                   self.inlet_face, self.outlet_face,
                                    self.inlet_y, self.inlet_z, self.inlet_radius, self.inlet_velocity,
                                    self.outlet_y, self.outlet_z, self.outlet_radius, self.outlet_velocity)
     
     def apply_walls(self):
         apply_walls_kernel(self.velocity, self.res,
+                          self.inlet_face, self.outlet_face,
                           self.inlet_y, self.inlet_z, self.inlet_radius,
                           self.outlet_y, self.outlet_z, self.outlet_radius)
     
