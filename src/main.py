@@ -50,6 +50,8 @@ SCALE = 10.0
 # Scene Data
 box_mesh = None
 pipe_mesh = None
+inlet_pipe_mesh = None
+outlet_pipe_mesh = None
 
 
 def update_box_geometry(res_x, res_y, res_z):
@@ -77,19 +79,19 @@ def update_box_geometry(res_x, res_y, res_z):
 
 def update_pipe_geometry(inlet_face, outlet_face, in_y, out_y, in_rad, out_rad, in_z, out_z, res_x, res_y, res_z):
     """パイプジオメトリを更新（配置面に応じた向き）"""
-    global pipe_mesh
-    verts = []
-    lines_list = []
+    global pipe_mesh, inlet_pipe_mesh, outlet_pipe_mesh
     num_pipe_segs = 16
     pipe_length = 20
     
-    def add_pipe_mesh(start_pos, end_pos, radius):
-        start_idx = len(verts)
+    def create_single_pipe_mesh(start_pos, end_pos, radius):
+        verts = []
+        lines_list = []
+        
         # Determine orientation based on pipe direction
         direction = np.array(end_pos) - np.array(start_pos)
         length = np.linalg.norm(direction)
         if length < 0.01:
-            return
+            return None
         direction = direction / length
         
         # Find perpendicular vectors
@@ -110,12 +112,21 @@ def update_pipe_geometry(inlet_face, outlet_face, in_y, out_y, in_rad, out_rad, 
             verts.append(p1.tolist())
             verts.append(p2.tolist())
             
-            curr = start_idx + 2*i
-            next_seg = start_idx + 2*((i+1)%num_pipe_segs)
+            curr = 2*i
+            next_seg = 2*((i+1)%num_pipe_segs)
             
             lines_list.append([2, curr, next_seg])
             lines_list.append([2, curr+1, next_seg+1])
             lines_list.append([2, curr, curr+1])
+            
+        if not verts:
+            return None
+            
+        points = np.array(verts, dtype=np.float32)
+        lines_flat = np.hstack(lines_list)
+        mesh = pv.PolyData(points)
+        mesh.lines = lines_flat
+        return mesh
     
     # Inlet pipe position based on face
     if inlet_face == 0:  # Left (X-)
@@ -145,16 +156,8 @@ def update_pipe_geometry(inlet_face, outlet_face, in_y, out_y, in_rad, out_rad, 
         out_start = [out_y, res_y, out_z]
         out_end = [out_y, res_y + pipe_length, out_z]
     
-    add_pipe_mesh(in_start, in_end, in_rad)
-    add_pipe_mesh(out_start, out_end, out_rad)
-    
-    if verts:
-        points = np.array(verts, dtype=np.float32)
-        lines_flat = np.hstack(lines_list)
-        pipe_mesh = pv.PolyData(points)
-        pipe_mesh.lines = lines_flat
-    else:
-        pipe_mesh = None
+    inlet_pipe_mesh = create_single_pipe_mesh(in_start, in_end, in_rad)
+    outlet_pipe_mesh = create_single_pipe_mesh(out_start, out_end, out_rad)
 
 
 # ============ Dear PyGui Callbacks ============
@@ -833,8 +836,11 @@ def main():
         plotter.add_mesh(box_mesh, color="white", style="wireframe", line_width=2, name="walls")
         
     # パイプメッシュ初期化
-    if pipe_mesh:
-        plotter.add_mesh(pipe_mesh, color="gray", style="wireframe", line_width=2, name="pipes")
+    # パイプメッシュ初期化
+    if inlet_pipe_mesh:
+        plotter.add_mesh(inlet_pipe_mesh, color="red", style="wireframe", line_width=2, name="inlet_pipe")
+    if outlet_pipe_mesh:
+        plotter.add_mesh(outlet_pipe_mesh, color="blue", style="wireframe", line_width=2, name="outlet_pipe")
     
     # ライトとカメラ設定
     plotter.add_light(pv.Light(position=(res_x/2, res_y*1.5, res_z/2), color='white', intensity=0.8))
@@ -963,8 +969,10 @@ def main():
                 state.inlet_z_mm/SCALE, state.outlet_z_mm/SCALE, 
                 res_x, res_y, res_z
             )
-            if pipe_mesh:
-                 plotter.add_mesh(pipe_mesh, color="gray", style="wireframe", line_width=2, name="pipes")
+            if inlet_pipe_mesh:
+                 plotter.add_mesh(inlet_pipe_mesh, color="red", style="wireframe", line_width=2, name="inlet_pipe")
+            if outlet_pipe_mesh:
+                 plotter.add_mesh(outlet_pipe_mesh, color="blue", style="wireframe", line_width=2, name="outlet_pipe")
             
             # ソルバーパラメータ更新
             solver.update_params(

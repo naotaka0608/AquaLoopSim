@@ -16,6 +16,16 @@ from .config import GRID_RES, DEFAULT_NUM_PARTICLES, DT, DIVERGENCE_ITERATIONS
 PARTICLE_KERNEL_SOURCE = r'''
 extern "C" {
 
+__device__ float random_float(unsigned int seed) {
+    seed = (seed ^ 0x27bb2ee6u) * 0x76543210u;
+    seed ^= (seed << 13);
+    seed ^= (seed >> 17);
+    seed ^= (seed << 5);
+    return (float)(seed % 10000) / 10000.0f;
+}
+
+
+
 __device__ float3 trilinear_interp(const float* velocity, int res_x, int res_y, int res_z, 
                                   float x, float y, float z) {
     int x0 = (int)floor(x);
@@ -34,13 +44,6 @@ __device__ float3 trilinear_interp(const float* velocity, int res_x, int res_y, 
     float fx = x - x0;
     float fy = y - y0;
     float fz = z - z0;
-    
-    // Index helper: [x, y, z, c] -> flat index
-    // Layout: (res_x, res_y, res_z, 3)
-    // stride_c = 1
-    // stride_z = 3
-    // stride_y = 3 * res_z
-    // stride_x = 3 * res_z * res_y
     
     int s_z = 3;
     int s_y = 3 * res_z;
@@ -90,19 +93,19 @@ __device__ float3 sample_velocity_single(const float* velocity, float px, float 
         
         // Check Inlet
         if (inlet_face == 0 && px < 0) { // Left
-             if (abs(py - inlet_y) < (inlet_radius * 1.5f) && abs(pz - inlet_z) < (inlet_radius * 1.5f)) {
+             if (fabs(py - inlet_y) < (inlet_radius * 1.5f) && fabs(pz - inlet_z) < (inlet_radius * 1.5f)) {
                  in_inlet = true; vel.x = inlet_velocity;
              }
         } else if (inlet_face == 1 && px >= res_x - 1) { // Right
-             if (abs(py - inlet_y) < (inlet_radius * 1.5f) && abs(pz - inlet_z) < (inlet_radius * 1.5f)) {
+             if (fabs(py - inlet_y) < (inlet_radius * 1.5f) && fabs(pz - inlet_z) < (inlet_radius * 1.5f)) {
                  in_inlet = true; vel.x = -inlet_velocity;
              }
         } else if (inlet_face == 2 && py < 0) { // Bottom
-             if (abs(px - inlet_y) < (inlet_radius * 1.5f) && abs(pz - inlet_z) < (inlet_radius * 1.5f)) { // Note: inlet_y is actually coord1 on face
+             if (fabs(px - inlet_y) < (inlet_radius * 1.5f) && fabs(pz - inlet_z) < (inlet_radius * 1.5f)) { 
                  in_inlet = true; vel.y = inlet_velocity;
              }
         } else if (inlet_face == 3 && py >= res_y - 1) { // Top
-             if (abs(px - inlet_y) < (inlet_radius * 1.5f) && abs(pz - inlet_z) < (inlet_radius * 1.5f)) {
+             if (fabs(px - inlet_y) < (inlet_radius * 1.5f) && fabs(pz - inlet_z) < (inlet_radius * 1.5f)) {
                  in_inlet = true; vel.y = -inlet_velocity;
              }
         }
@@ -110,13 +113,13 @@ __device__ float3 sample_velocity_single(const float* velocity, float px, float 
         // Check Outlet
         if (!in_inlet) {
             if (outlet_face == 0 && px < 0) {
-                 if (abs(py - outlet_y) < (outlet_radius * 1.5f) && abs(pz - outlet_z) < (outlet_radius * 1.5f)) vel.x = -outlet_velocity;
+                 if (fabs(py - outlet_y) < (outlet_radius * 1.5f) && fabs(pz - outlet_z) < (outlet_radius * 1.5f)) vel.x = -outlet_velocity;
             } else if (outlet_face == 1 && px >= res_x - 1) {
-                 if (abs(py - outlet_y) < (outlet_radius * 1.5f) && abs(pz - outlet_z) < (outlet_radius * 1.5f)) vel.x = outlet_velocity;
+                 if (fabs(py - outlet_y) < (outlet_radius * 1.5f) && fabs(pz - outlet_z) < (outlet_radius * 1.5f)) vel.x = outlet_velocity;
             } else if (outlet_face == 2 && py < 0) {
-                 if (abs(px - outlet_y) < (outlet_radius * 1.5f) && abs(pz - outlet_z) < (outlet_radius * 1.5f)) vel.y = -outlet_velocity;
+                 if (fabs(px - outlet_y) < (outlet_radius * 1.5f) && fabs(pz - outlet_z) < (outlet_radius * 1.5f)) vel.y = -outlet_velocity;
             } else if (outlet_face == 3 && py >= res_y - 1) {
-                 if (abs(px - outlet_y) < (outlet_radius * 1.5f) && abs(pz - outlet_z) < (outlet_radius * 1.5f)) vel.y = outlet_velocity;
+                 if (fabs(px - outlet_y) < (outlet_radius * 1.5f) && fabs(pz - outlet_z) < (outlet_radius * 1.5f)) vel.y = outlet_velocity;
             }
         }
     }
@@ -131,19 +134,32 @@ __device__ float3 get_face_pos(int face, float c1, float c2, int res_x, int res_
 }
 
 __device__ void apply_colormap_gpu(float t, int mode, float* r, float* g, float* b) {
-    // 0=Blue-Red, 1=Rainbow, 2=Cool-Warm, 3=Viridis
-    // Simplified RGB logic
-    if (mode == 0) { // Blue -> Red
-        *r = t; *g = 0.0f; *b = 1.0f - t;
-    } else {
-        // Simple Rainbow
-        float h = (1.0f - t) * 240.0f; // Blue to Red
-        float x = (1.0f - abs(fmod(h/60.0f, 2.0f) - 1.0f));
-        if(h < 60) {*r=1;*g=x;*b=0;}
-        else if(h < 120) {*r=x;*g=1;*b=0;}
-        else if(h < 180) {*r=0;*g=1;*b=x;}
-        else if(h < 240) {*r=0;*g=x;*b=1;}
-        else {*r=x;*g=0;*b=1;}
+    if (mode == 0) { // Blue-Red (Default)
+        *r = t;
+        *g = t * 0.3f;
+        *b = 1.0f - t;
+    } else if (mode == 1) { // Rainbow
+        float h = t * 0.8f * 6.0f;
+        int i = (int)floor(h);
+        float f = h - i;
+        if (i == 0) { *r=1.0f; *g=f; *b=0.0f; }
+        else if (i == 1) { *r=1.0f-f; *g=1.0f; *b=0.0f; }
+        else if (i == 2) { *r=0.0f; *g=1.0f; *b=f; }
+        else if (i == 3) { *r=0.0f; *g=1.0f-f; *b=1.0f; }
+        else if (i == 4) { *r=f; *g=0.0f; *b=1.0f; }
+        else { *r=1.0f; *g=0.0f; *b=1.0f-f; }
+    } else if (mode == 2) { // Cool-Warm
+        if (t < 0.5f) {
+            float s = t * 2.0f;
+            *r = s; *g = s; *b = 1.0f;
+        } else {
+            float s = (t - 0.5f) * 2.0f;
+            *r = 1.0f; *g = 1.0f - s; *b = 1.0f - s;
+        }
+    } else if (mode == 3) { // Viridis-like
+        *r = 0.267f + t * 0.6f;
+        *g = 0.004f + t * 0.87f;
+        *b = 0.329f + t * 0.3f - t * t * 0.5f;
     }
 }
 
@@ -155,7 +171,8 @@ __global__ void advect_particles(
     float inlet_y, float inlet_z, float inlet_radius, float inlet_velocity,
     float outlet_y, float outlet_z, float outlet_radius, float outlet_velocity,
     int num_particles, int trail_length, int colormap_mode,
-    const float* obstacle_data, int num_obstacles
+    const float* obstacle_data, int num_obstacles,
+    unsigned int frame_seed
 ) {
     int i = blockDim.x * blockIdx.x + threadIdx.x;
     if (i >= num_particles) return;
@@ -187,10 +204,29 @@ __global__ void advect_particles(
             vel.y += (to_outlet.y/dist_out) * strength;
             vel.z += (to_outlet.z/dist_out) * strength;
         }
+        
+        // Inlet Jet Boost
+        float3 to_inlet_vec = make_float3(pos.x - inlet_pos.x, pos.y - inlet_pos.y, pos.z - inlet_pos.z);
+        float dist_in = sqrt(to_inlet_vec.x*to_inlet_vec.x + to_inlet_vec.y*to_inlet_vec.y + to_inlet_vec.z*to_inlet_vec.z);
+        float jet_range = max_dim * 0.3f;
+        
+        if (dist_in < jet_range && dist_in > 0.1f) {
+            float strength = inlet_velocity * 0.03f * (1.0f - dist_in/jet_range);
+            vel.x += (to_inlet_vec.x/dist_in) * strength;
+            vel.y += (to_inlet_vec.y/dist_in) * strength;
+            vel.z += (to_inlet_vec.z/dist_in) * strength;
+        }
+        
+        // Anti-stagnation jitter
+        float speed = sqrt(vel.x*vel.x + vel.y*vel.y + vel.z*vel.z);
+        if (speed < 3.0f) {
+            vel.x += (random_float(frame_seed + i * 10 + 0) - 0.5f) * 5.0f;
+            vel.y += (random_float(frame_seed + i * 10 + 1) - 0.5f) * 5.0f;
+            vel.z += (random_float(frame_seed + i * 10 + 2) - 0.5f) * 5.0f;
+        }
     }
     
     // Integration
-    particle_vel_arr[i*3] = vel.x; // Typo in arg name fixed below
     vel_arr[i*3] = vel.x;
     vel_arr[i*3+1] = vel.y;
     vel_arr[i*3+2] = vel.z;
@@ -199,6 +235,120 @@ __global__ void advect_particles(
     p_next.x = pos.x + vel.x * dt;
     p_next.y = pos.y + vel.y * dt;
     p_next.z = pos.z + vel.z * dt;
+    
+    // Wall Collisions
+    float margin = 2.0f;
+    float kick = 20.0f;
+    
+    // Helper hole checks
+    bool in_hole_inlet_x = false;
+    bool in_hole_outlet_x = false;
+    bool in_hole_inlet_y = false;
+    bool in_hole_outlet_y = false;
+        
+    if ((pow(p_next.y - inlet_y, 2.0f) + pow(p_next.z - inlet_z, 2.0f)) < pow(inlet_radius, 2.0f)) in_hole_inlet_x = true;
+    if ((pow(p_next.y - outlet_y, 2.0f) + pow(p_next.z - outlet_z, 2.0f)) < pow(outlet_radius, 2.0f)) in_hole_outlet_x = true;
+    if ((pow(p_next.x - inlet_y, 2.0f) + pow(p_next.z - inlet_z, 2.0f)) < pow(inlet_radius, 2.0f)) in_hole_inlet_y = true;
+    if ((pow(p_next.x - outlet_y, 2.0f) + pow(p_next.z - outlet_z, 2.0f)) < pow(outlet_radius, 2.0f)) in_hole_outlet_y = true;
+
+    // Left Wall (X=0)
+    if (p_next.x < margin) {
+        bool has_hole = (inlet_face == 0 && in_hole_inlet_x) || (outlet_face == 0 && in_hole_outlet_x);
+        if (!has_hole) {
+            p_next.x = margin;
+            vel.x *= -0.8f;
+            vel.y += (random_float(frame_seed + i * 10 + 3) - 0.5f) * kick;
+            vel.z += (random_float(frame_seed + i * 10 + 4) - 0.5f) * kick;
+        }
+    }
+    // Right Wall (X=res_x)
+    if (p_next.x > res_x - margin) {
+        bool has_hole = (inlet_face == 1 && in_hole_inlet_x) || (outlet_face == 1 && in_hole_outlet_x);
+        if (!has_hole) {
+            p_next.x = res_x - margin;
+            vel.x *= -0.8f;
+            vel.y += (random_float(frame_seed + i * 10 + 5) - 0.5f) * kick;
+            vel.z += (random_float(frame_seed + i * 10 + 6) - 0.5f) * kick;
+        }
+    }
+    // Floor (Y=0)
+    if (p_next.y < margin) {
+        bool has_hole = (inlet_face == 2 && in_hole_inlet_y) || (outlet_face == 2 && in_hole_outlet_y);
+        if (!has_hole) {
+            p_next.y = margin;
+            vel.y *= -0.8f;
+            vel.x += (random_float(frame_seed + i * 10 + 7) - 0.5f) * kick;
+            vel.z += (random_float(frame_seed + i * 10 + 8) - 0.5f) * kick;
+        }
+    }
+    // Ceiling (Y=res_y)
+    if (p_next.y > res_y - margin) {
+        bool has_hole = (inlet_face == 3 && in_hole_inlet_y) || (outlet_face == 3 && in_hole_outlet_y);
+        if (!has_hole) {
+            p_next.y = res_y - margin;
+            vel.y *= -0.8f;
+            vel.x += (random_float(frame_seed + i * 10 + 9) - 0.5f) * kick;
+            vel.z += (random_float(frame_seed + i * 10 + 0) - 0.5f) * kick;
+        }
+    }
+    // Back Wall (Z=0)
+    if (p_next.z < margin) {
+         p_next.z = margin;
+         vel.z *= -0.8f;
+         vel.x += (random_float(frame_seed + i * 10 + 1) - 0.5f) * kick;
+         vel.y += (random_float(frame_seed + i * 10 + 2) - 0.5f) * kick;
+    }
+    // Front Wall (Z=res_z)
+    if (p_next.z > res_z - margin) {
+         p_next.z = res_z - margin;
+         vel.z *= -0.8f;
+         vel.x += (random_float(frame_seed + i * 10 + 3) - 0.5f) * kick;
+         vel.y += (random_float(frame_seed + i * 10 + 4) - 0.5f) * kick;
+    }
+    
+    // Recycling Logic
+    bool should_recycle = false;
+    float outlet_depth = 0.0f;
+    
+    if (outlet_face == 0) outlet_depth = -p_next.x;
+    else if (outlet_face == 1) outlet_depth = p_next.x - res_x;
+    else if (outlet_face == 2) outlet_depth = -p_next.y;
+    else if (outlet_face == 3) outlet_depth = p_next.y - res_y;
+    
+    if (outlet_depth > 20.0f) should_recycle = true;
+    
+    if (should_recycle) {
+        // Respawn at inlet
+        unsigned int seed = frame_seed + i * 19937;
+        float r = sqrt(random_float(seed)) * (inlet_radius * 0.8f);
+        float theta = random_float(seed+1) * 6.28318f;
+        float u = r * cos(theta);
+        float v = r * sin(theta);
+        
+        if (inlet_face == 0) { // Left
+            p_next.x = -19.0f;
+            p_next.y = inlet_y + u;
+            p_next.z = inlet_z + v;
+        } else if (inlet_face == 1) { // Right
+            p_next.x = res_x + 19.0f;
+            p_next.y = inlet_y + u;
+            p_next.z = inlet_z + v;
+        } else if (inlet_face == 2) { // Bottom
+            p_next.x = inlet_y + u;
+            p_next.y = -19.0f;
+            p_next.z = inlet_z + v;
+        } else if (inlet_face == 3) { // Top
+            p_next.x = inlet_y + u;
+            p_next.y = res_y + 19.0f;
+            p_next.z = inlet_z + v;
+        }
+        
+        // Reset velocity
+        vel.x = 0.0f; vel.y = 0.0f; vel.z = 0.0f;
+        vel_arr[i*3] = 0.0f;
+        vel_arr[i*3+1] = 0.0f;
+        vel_arr[i*3+2] = 0.0f;
+    }
     
     // Store back
     pos_arr[i*3] = p_next.x;
@@ -211,6 +361,7 @@ __global__ void advect_particles(
         float max_v = (inlet_velocity < 50.0f) ? 50.0f : inlet_velocity;
         float t = speed / max_v;
         if (t > 1.0f) t = 1.0f;
+        if (should_recycle) t = 0.0f; // New particles are slow
         
         float r, g, b;
         apply_colormap_gpu(t, colormap_mode, &r, &g, &b);
@@ -221,7 +372,6 @@ __global__ void advect_particles(
     
     // Trail Update
     int t_idx = trail_idx_arr[i];
-    // trail_positions layout: (num_particles, trail_length, 3) implies [i * trail_len * 3 + t_idx * 3 + c]
     int t_stride = trail_length * 3;
     trail_pos_arr[i * t_stride + t_idx * 3] = p_next.x;
     trail_pos_arr[i * t_stride + t_idx * 3 + 1] = p_next.y;
@@ -230,7 +380,48 @@ __global__ void advect_particles(
     trail_idx_arr[i] = (t_idx + 1) % trail_length;
 }
 
+__global__ void advect_velocity_kernel(
+    float* new_velocity, const float* velocity,
+    int res_x, int res_y, int res_z, float dt,
+    int inlet_face, int outlet_face,
+    float inlet_y, float inlet_z, float inlet_radius, float inlet_velocity,
+    float outlet_y, float outlet_z, float outlet_radius, float outlet_velocity
+) {
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    int idy = blockDim.y * blockIdx.y + threadIdx.y;
+    int idz = blockDim.z * blockIdx.z + threadIdx.z;
+    
+    if (idx >= res_x || idy >= res_y || idz >= res_z) return;
+    
+    // Calculate stride for (res_x, res_y, res_z, 3) C-order
+    int s_z = 3;
+    int s_y = 3 * res_z;
+    int s_x = 3 * res_z * res_y;
+    
+    int flat_idx = idx * s_x + idy * s_y + idz * s_z;
+    
+    // Current velocity
+    float3 current_vel = make_float3(velocity[flat_idx], velocity[flat_idx+1], velocity[flat_idx+2]);
+    
+    // Backtrace
+    float3 pos = make_float3((float)idx + 0.5f, (float)idy + 0.5f, (float)idz + 0.5f);
+    float3 p_back;
+    p_back.x = pos.x - current_vel.x * dt;
+    p_back.y = pos.y - current_vel.y * dt;
+    p_back.z = pos.z - current_vel.z * dt;
+    
+    // Sample with pipe logic
+    float3 new_vel = sample_velocity_single(velocity, p_back.x, p_back.y, p_back.z, res_x, res_y, res_z,
+                                            inlet_face, outlet_face, inlet_y, inlet_z, inlet_radius, inlet_velocity,
+                                            outlet_y, outlet_z, outlet_radius, outlet_velocity);
+                                            
+    new_velocity[flat_idx] = new_vel.x;
+    new_velocity[flat_idx+1] = new_vel.y;
+    new_velocity[flat_idx+2] = new_vel.z;
 }
+
+}
+
 '''
 
 class FluidSolverGPU:
@@ -244,6 +435,7 @@ class FluidSolverGPU:
         
         # Compile Kernels
         self.advect_particles_fn = cp.RawKernel(PARTICLE_KERNEL_SOURCE, 'advect_particles')
+        self.advect_velocity_fn = cp.RawKernel(PARTICLE_KERNEL_SOURCE, 'advect_velocity_kernel')
         
         # Fluid fields (on GPU)
         self.velocity_gpu = cp.zeros((res_x, res_y, res_z, 3), dtype=cp.float32)
@@ -276,6 +468,8 @@ class FluidSolverGPU:
         self.init_particles()
         
         self.update_params(0, 1, 10.0, 10.0, 5.0, 5.0, 10.0, 10.0, 500.0, 500.0)
+        
+        self.frame_count = 0
 
     def init_particles(self):
         # Initialize randomly (flattened)
@@ -285,8 +479,9 @@ class FluidSolverGPU:
             pos[c::3] += 1.0
             
         self.particle_pos_gpu = cp.asarray(pos)
-        self.particle_color_gpu[:] = 1.0 # White start
+        self.particle_color_gpu[:] = 0.0
         self.particle_color_gpu[1::3] = 1.0
+        self.particle_color_gpu[2::3] = 1.0
         
     def update_params(self, inlet_face, outlet_face, in_y, out_y, in_rad, out_rad, in_z, out_z, in_flow_lpm, out_flow_lpm):
         self.inlet_face = int(inlet_face)
@@ -299,14 +494,23 @@ class FluidSolverGPU:
         self.outlet_z = float(out_z)
         
         r_in = max(1.0, float(in_rad))
-        area_in = math.pi * r_in**2
-        in_flow_rate_mm3_s = float(in_flow_lpm) * 1000 * 1000 / 60
-        self.inlet_velocity = in_flow_rate_mm3_s / area_in * (self.dt * 60) * 0.05
-        
         r_out = max(1.0, float(out_rad))
+        
+        area_in = math.pi * r_in**2
         area_out = math.pi * r_out**2
-        out_flow_rate_mm3_s = float(out_flow_lpm) * 1000 * 1000 / 60
-        self.outlet_velocity = out_flow_rate_mm3_s / area_out * (self.dt * 60) * 0.05
+        
+        q_in_mm3s = float(in_flow_lpm) * 1000000.0 / 60.0
+        q_out_mm3s = float(out_flow_lpm) * 1000000.0 / 60.0
+        
+        v_in_mm = q_in_mm3s / area_in
+        v_out_mm = q_out_mm3s / area_out
+        
+        # Grid scaling (same as CPU)
+        v_in_grid = v_in_mm / 10.0
+        v_out_grid = v_out_mm / 10.0
+        
+        self.inlet_velocity = min(500.0, v_in_grid)
+        self.outlet_velocity = min(500.0, v_out_grid)
     
     @property
     def velocity(self):
@@ -320,10 +524,18 @@ class FluidSolverGPU:
     def particle_color(self):
         return cp.asnumpy(self.particle_color_gpu).reshape((-1, 3))
 
+    @property
+    def particle_vel(self):
+        return cp.asnumpy(self.particle_vel_gpu).reshape((-1, 3))
+
+    @property
+    def particle_absorbed(self):
+        return cp.asnumpy(self.particle_absorbed_gpu)
+
     def step(self):
-        self.apply_inlet_boundary()
         self.advect()
         self.apply_walls()
+        self.apply_inlet_boundary()
         
         self.divergence_calc()
         for _ in range(DIVERGENCE_ITERATIONS):
@@ -332,42 +544,119 @@ class FluidSolverGPU:
         
         self.apply_inlet_boundary()
         self.advect_particles()
+        self.frame_count += 1
 
     def advect(self):
-        # Use map_coordinates for semi-Lagrangian
-        # Coords: grid_indices - velocity * dt
-        # Create grid indices
-        x, y, z = cp.mgrid[0:self.res[0], 0:self.res[1], 0:self.res[2]]
+        # Use custom CUDA kernel for Semi-Lagrangian Advection with Pipe Support
+        block = (8, 8, 8)
+        grid = (
+            (self.res[0] + 7) // 8,
+            (self.res[1] + 7) // 8,
+            (self.res[2] + 7) // 8
+        )
         
-        # Backtrace
-        # velocity matches (x,y,z,3). We need separate components
-        u = self.velocity_gpu[..., 0]
-        v = self.velocity_gpu[..., 1]
-        w = self.velocity_gpu[..., 2]
+        self.advect_velocity_fn(
+            grid, block,
+            (
+                self.new_velocity_gpu, self.velocity_gpu,
+                self.res[0], self.res[1], self.res[2], cp.float32(self.dt),
+                cp.int32(self.inlet_face), cp.int32(self.outlet_face),
+                cp.float32(self.inlet_y), cp.float32(self.inlet_z), cp.float32(self.inlet_radius), cp.float32(self.inlet_velocity),
+                cp.float32(self.outlet_y), cp.float32(self.outlet_z), cp.float32(self.outlet_radius), cp.float32(self.outlet_velocity)
+            )
+        )
         
-        x_back = x - u * self.dt
-        y_back = y - v * self.dt
-        z_back = z - w * self.dt
-        
-        # map_coordinates requires coordinates shape (3, x, y, z)
-        coords = cp.stack([x_back, y_back, z_back])
-        
-        # Interpolate
-        # We advect each component
-        self.new_velocity_gpu[..., 0] = cupyx.scipy.ndimage.map_coordinates(u, coords, order=1, mode='nearest')
-        self.new_velocity_gpu[..., 1] = cupyx.scipy.ndimage.map_coordinates(v, coords, order=1, mode='nearest')
-        self.new_velocity_gpu[..., 2] = cupyx.scipy.ndimage.map_coordinates(w, coords, order=1, mode='nearest')
-        
+        # Swap
         self.velocity_gpu[:] = self.new_velocity_gpu
 
     def apply_inlet_boundary(self):
-         # Simplified bulk update using masks
-         # This is hard to do efficiently with generic slicing for circle shapes without creating large masks
-         # But manageable
-         pass # Skipping implementation for brevity, rely on advect to carry flow for now?
-         # No, need source.
-         # Can use RawKernel or ElementwiseKernel easily
-         pass 
+        # Refined approach: Use a specific RawKernel for boundary application
+        if not hasattr(self, 'apply_boundary_fn'):
+            source = r'''
+            extern "C" __global__ void apply_boundary_kernel(
+                float* velocity, int res_x, int res_y, int res_z,
+                int face, float vy, float vz, float radius, float v_mag, float dt
+            ) {
+                int idx = blockDim.x * blockIdx.x + threadIdx.x;
+                int idy = blockDim.y * blockIdx.y + threadIdx.y;
+                int idz = blockDim.z * blockIdx.z + threadIdx.z;
+                
+                if (idx >= res_x || idy >= res_y || idz >= res_z) return;
+                
+                // Check if we are in the boundary layer (depth 5)
+                bool active = false;
+                
+                if (face == 0 && idx < 5) active = true; // Left
+                else if (face == 1 && idx >= res_x - 5) active = true; // Right
+                else if (face == 2 && idy < 5) active = true; // Bottom
+                else if (face == 3 && idy >= res_y - 5) active = true; // Top
+                
+                if (!active) return;
+                
+                // Circle check
+                // Face 0/1 (X): check (y-vy)^2 + (z-vz)^2 < r^2
+                // Face 2/3 (Y): check (x-vy)^2 + (z-vz)^2 < r^2  (Note: vy arg passed as 'coord1', vz as 'coord2')
+                
+                float c1 = (float)idy;
+                float c2 = (float)idz;
+                if (face >= 2) c1 = (float)idx;
+                
+                float dist_sq = (c1 - vy)*(c1 - vy) + (c2 - vz)*(c2 - vz);
+                
+                if (dist_sq < radius * radius) {
+                    int flat_idx = (idx * res_y * res_z + idy * res_z + idz) * 3;
+                    
+                    float vx = 0.0f;
+                    float vy_val = 0.0f;
+                    float vz_val = 0.0f;
+                    
+                    if (face == 0) vx = v_mag;
+                    else if (face == 1) vx = -v_mag;
+                    else if (face == 2) vy_val = v_mag;
+                    else if (face == 3) vy_val = -v_mag;
+                    
+                    velocity[flat_idx] = vx;
+                    velocity[flat_idx+1] = vy_val;
+                    velocity[flat_idx+2] = vz_val;
+                }
+            }
+            '''
+            self.apply_boundary_fn = cp.RawKernel(source, 'apply_boundary_kernel')
+
+        block = (8, 8, 8)
+        grid = (
+            (self.res[0] + 7) // 8,
+            (self.res[1] + 7) // 8,
+            (self.res[2] + 7) // 8
+        )
+        
+        # Apply Inlet
+        self.apply_boundary_fn(
+            grid, block,
+            (
+                self.velocity_gpu,
+                self.res[0], self.res[1], self.res[2],
+                cp.int32(self.inlet_face),
+                cp.float32(self.inlet_y), cp.float32(self.inlet_z),
+                cp.float32(self.inlet_radius),
+                cp.float32(self.inlet_velocity),
+                cp.float32(self.dt)
+            )
+        )
+        
+        # Apply Outlet
+        self.apply_boundary_fn(
+            grid, block,
+            (
+                self.velocity_gpu,
+                self.res[0], self.res[1], self.res[2],
+                cp.int32(self.outlet_face),
+                cp.float32(self.outlet_y), cp.float32(self.outlet_z),
+                cp.float32(self.outlet_radius),
+                cp.float32(self.outlet_velocity),
+                cp.float32(self.dt)
+            )
+        ) 
 
     def apply_walls(self):
         # Enforce 0 at boundaries (except holes)
@@ -378,43 +667,79 @@ class FluidSolverGPU:
         self.velocity_gpu[:, :, 0, 2] = 0
         self.velocity_gpu[:, :, -1, 2] = 0
 
+    def _shift(self, arr, shift, axis):
+        """Helper to shift array with 0-padding (non-periodic)"""
+        result = cp.zeros_like(arr)
+        if axis == 0:
+            if shift > 0: result[shift:] = arr[:-shift]
+            elif shift < 0: result[:shift] = arr[-shift:]
+        elif axis == 1:
+            if shift > 0: result[:, shift:] = arr[:, :-shift]
+            elif shift < 0: result[:, :shift] = arr[:, -shift:]
+        elif axis == 2:
+            if shift > 0: result[:, :, shift:] = arr[:, :, :-shift]
+            elif shift < 0: result[:, :, :shift] = arr[:, :, -shift:]
+        return result
+
     def divergence_calc(self):
-        # Div = du/dx + dv/dy + dw/dz
-        # Central difference: (u[i+1] - u[i-1])/2
+        # Calculate divergence using central difference
+        # div = 0.5 * (u[x+1] - u[x-1] + v[y+1] - v[y-1] + w[z+1] - w[z-1])
+        # We use 0 for OOB (Dirichlet 0 velocity at walls)
+        
         u = self.velocity_gpu[..., 0]
         v = self.velocity_gpu[..., 1]
         w = self.velocity_gpu[..., 2]
         
-        du = (cp.roll(u, -1, axis=0) - cp.roll(u, 1, axis=0)) * 0.5
-        dv = (cp.roll(v, -1, axis=1) - cp.roll(v, 1, axis=1)) * 0.5
-        dw = (cp.roll(w, -1, axis=2) - cp.roll(w, 1, axis=2)) * 0.5
+        u_plus = self._shift(u, -1, 0)
+        u_minus = self._shift(u, 1, 0)
+        v_plus = self._shift(v, -1, 1)
+        v_minus = self._shift(v, 1, 1)
+        w_plus = self._shift(w, -1, 2)
+        w_minus = self._shift(w, 1, 2)
         
-        self.divergence_gpu = du + dv + dw
-        
-        # Fix boundary divergence?
-        pass
+        self.divergence_gpu = 0.5 * (
+            (u_plus - u_minus) +
+            (v_plus - v_minus) +
+            (w_plus - w_minus)
+        )
 
     def pressure_jacobi(self):
-        # p_new = (p_l + p_r + p_u + p_d + p_f + p_b - div) / 6
+        # Jacobi iteration for Poisson equation: laplacian(p) = div
+        # p_new = (p_x+1 + p_x-1 + ... - div) / 6
+        # Boundary condition: p=0 outside (Dirichlet)
+        
         p = self.pressure_gpu
-        res = (cp.roll(p, 1, axis=0) + cp.roll(p, -1, axis=0) +
-               cp.roll(p, 1, axis=1) + cp.roll(p, -1, axis=1) +
-               cp.roll(p, 1, axis=2) + cp.roll(p, -1, axis=2) -
-               self.divergence_gpu) / 6.0
-        self.pressure_gpu[:] = res # In-place or copy? Jacobi needs buffer usually, code uses new_pressure in CPU.
-        # But Gauss-Seidel is generally stable in place? No, parallel needs Jacobi.
-        # Using simple Jacobi here.
+        
+        p_left = self._shift(p, 1, 0)
+        p_right = self._shift(p, -1, 0)
+        p_down = self._shift(p, 1, 1)
+        p_up = self._shift(p, -1, 1)
+        p_back = self._shift(p, 1, 2)
+        p_front = self._shift(p, -1, 2)
+        
+        self.new_pressure_gpu[:] = (
+            p_left + p_right + p_down + p_up + p_back + p_front - self.divergence_gpu
+        ) / 6.0
+        
+        # Swap
+        self.pressure_gpu[:] = self.new_pressure_gpu
 
     def project(self):
-        # u -= 0.5 * (p_i+1 - p_i-1)
-        p = self.pressure_gpu
-        grad_x = (cp.roll(p, -1, axis=0) - cp.roll(p, 1, axis=0)) * 0.5
-        grad_y = (cp.roll(p, -1, axis=1) - cp.roll(p, 1, axis=1)) * 0.5
-        grad_z = (cp.roll(p, -1, axis=2) - cp.roll(p, 1, axis=2)) * 0.5
+        # Subtract pressure gradient from velocity
+        # u -= 0.5 * (p_x+1 - p_x-1)
         
-        self.velocity_gpu[..., 0] -= grad_x
-        self.velocity_gpu[..., 1] -= grad_y
-        self.velocity_gpu[..., 2] -= grad_z
+        p = self.pressure_gpu
+        
+        p_left = self._shift(p, 1, 0)
+        p_right = self._shift(p, -1, 0)
+        p_down = self._shift(p, 1, 1)
+        p_up = self._shift(p, -1, 1)
+        p_back = self._shift(p, 1, 2)
+        p_front = self._shift(p, -1, 2)
+        
+        self.velocity_gpu[..., 0] -= 0.5 * (p_right - p_left)
+        self.velocity_gpu[..., 1] -= 0.5 * (p_up - p_down)
+        self.velocity_gpu[..., 2] -= 0.5 * (p_front - p_back)
 
     def advect_particles(self):
         grid_dim = (int((self.num_particles + 511) / 512), 1, 1)
@@ -431,6 +756,7 @@ class FluidSolverGPU:
                 cp.float32(self.inlet_y), cp.float32(self.inlet_z), cp.float32(self.inlet_radius), cp.float32(self.inlet_velocity),
                 cp.float32(self.outlet_y), cp.float32(self.outlet_z), cp.float32(self.outlet_radius), cp.float32(self.outlet_velocity),
                 self.num_particles, self.trail_length, self.colormap_mode,
-                self.obstacle_data_gpu, self.num_obstacles
+                self.obstacle_data_gpu, self.num_obstacles,
+                cp.uint32(self.frame_count)
             )
         )
