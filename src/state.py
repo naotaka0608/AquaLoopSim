@@ -10,6 +10,10 @@ class AppState:
         self.tank_height = 500.0
         self.tank_depth = 1000.0
         
+        # 0:Left(X-), 1:Right(X+), 2:Bottom(Y-), 3:Top(Y+)
+        self.inlet_face = 0
+        self.outlet_face = 1
+        
         self.inlet_y_mm = 100.0
         self.inlet_z_mm = 500.0
         self.inlet_radius_mm = 60.0
@@ -83,6 +87,8 @@ class AppState:
             'tank_width': self.tank_width,
             'tank_height': self.tank_height,
             'tank_depth': self.tank_depth,
+            'inlet_face': self.inlet_face,
+            'outlet_face': self.outlet_face,
             'inlet_y_mm': self.inlet_y_mm,
             'inlet_z_mm': self.inlet_z_mm,
             'inlet_radius_mm': self.inlet_radius_mm,
@@ -117,6 +123,8 @@ class AppState:
         self.tank_width = data.get('tank_width', self.tank_width)
         self.tank_height = data.get('tank_height', self.tank_height)
         self.tank_depth = data.get('tank_depth', self.tank_depth)
+        self.inlet_face = data.get('inlet_face', self.inlet_face)
+        self.outlet_face = data.get('outlet_face', self.outlet_face)
         self.inlet_y_mm = data.get('inlet_y_mm', self.inlet_y_mm)
         self.inlet_z_mm = data.get('inlet_z_mm', self.inlet_z_mm)
         self.inlet_radius_mm = data.get('inlet_radius_mm', self.inlet_radius_mm)

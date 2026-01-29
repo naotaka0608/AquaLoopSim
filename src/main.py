@@ -124,20 +124,41 @@ def main():
             box_mesh.points = corners
             # linesはトポロジー変わらないのでそのまま
             
-    def create_pipe_polydata(y, z, radius, start_x=0.0, length=20.0):
-        """指定されたパラメータでパイプ形状のPolyDataを生成して返す"""
+    def create_pipe_polydata(start_pos, end_pos, radius):
+        """指定された始点・終点でパイプ形状のPolyDataを生成"""
         verts = []
         lines_list = []
         num_pipe_segs = 16
-        start_pos = [start_x, y, z]
-        end_pos = [start_x + length, y, z] # length正なら+X方向, 負なら-X方向
+        
+        # Vector along pipe
+        v = np.array(end_pos) - np.array(start_pos)
+        length = np.linalg.norm(v)
+        if length < 1e-6: return None
+        
+        axis = v / length
+        
+        # Create basis vectors
+        if abs(axis[0]) < 0.9:
+            up = np.array([1, 0, 0])
+        else:
+            up = np.array([0, 1, 0])
+            
+        right = np.cross(axis, up)
+        right /= np.linalg.norm(right)
+        up = np.cross(right, axis)
         
         for i in range(num_pipe_segs):
             theta = (i / num_pipe_segs) * 2 * np.pi
-            dy = np.cos(theta) * radius
-            dz = np.sin(theta) * radius
-            p1 = [start_pos[0], start_pos[1] + dy, start_pos[2] + dz]
-            p2 = [end_pos[0], end_pos[1] + dy, end_pos[2] + dz]
+            # Circle in local coordinates
+            local_y = np.cos(theta) * radius
+            local_z = np.sin(theta) * radius
+            
+            # Transform to global
+            offset = right * local_y + up * local_z
+            
+            p1 = start_pos + offset
+            p2 = end_pos + offset
+            
             verts.append(p1)
             verts.append(p2)
             
@@ -153,32 +174,66 @@ def main():
         mesh.lines = lines_flat
         return mesh
 
-    def update_inlet_geometry(y, z, radius):
+    def update_inlet_geometry(face, p1, p2, radius):
         nonlocal inlet_mesh
-        # Inlet: X=0 から -20 (外側) へ
-        new_mesh = create_pipe_polydata(y, z, radius, start_x=0.0, length=-20.0)
+        # Face 0: X- (Left) -> Pipe along X
+        # Face 1: X+ (Right) -> Pipe along X
+        # Face 2: Y- (Bottom) -> Pipe along Y
+        # Face 3: Y+ (Top) -> Pipe along Y
+        
+        start_pos = np.zeros(3)
+        end_pos = np.zeros(3)
+        
+        if face == 0: # X- (Left)
+            start_pos = [-20.0, p1, p2]
+            end_pos = [0.0, p1, p2]
+        elif face == 1: # X+ (Right)
+            start_pos = [res_x, p1, p2]
+            end_pos = [res_x + 20.0, p1, p2]
+        elif face == 2: # Y- (Bottom)
+            start_pos = [p1, -20.0, p2]
+            end_pos = [p1, 0.0, p2]
+        elif face == 3: # Y+ (Top)
+            start_pos = [p1, res_y, p2]
+            end_pos = [p1, res_y + 20.0, p2]
+            
+        new_mesh = create_pipe_polydata(start_pos, end_pos, radius)
         if inlet_mesh is None:
             inlet_mesh = new_mesh
-        else:
+        elif new_mesh is not None:
             inlet_mesh.points = new_mesh.points
             inlet_mesh.lines = new_mesh.lines
 
-    def update_outlet_geometry(y, z, radius):
+    def update_outlet_geometry(face, p1, p2, radius):
         nonlocal outlet_mesh
-        # Outlet: X=res_x (Grid coordinates) から +20.0 (外側) へ
-        # Note: res_x is in grid units.
-        # Pipe length 20.0 to match inlet visual style (symmetric).
-        new_mesh = create_pipe_polydata(y, z, radius, start_x=res_x, length=20.0)
+        
+        start_pos = np.zeros(3)
+        end_pos = np.zeros(3)
+        
+        if face == 0: # X-
+            start_pos = [0.0, p1, p2]
+            end_pos = [-20.0, p1, p2] # Outwards
+        elif face == 1: # X+
+            start_pos = [res_x, p1, p2]
+            end_pos = [res_x + 20.0, p1, p2]
+        elif face == 2: # Y-
+            start_pos = [p1, 0.0, p2]
+            end_pos = [p1, -20.0, p2]
+        elif face == 3: # Y+
+            start_pos = [p1, res_y, p2]
+            end_pos = [p1, res_y + 20.0, p2]
+            
+        new_mesh = create_pipe_polydata(start_pos, end_pos, radius)
         if outlet_mesh is None:
             outlet_mesh = new_mesh
-        else:
+        elif new_mesh is not None:
             outlet_mesh.points = new_mesh.points
             outlet_mesh.lines = new_mesh.lines
 
     # Initial Geometry Update
     update_box_geometry(res_x, res_y, res_z)
-    update_inlet_geometry(state.inlet_y_mm/SCALE, state.inlet_z_mm/SCALE, state.inlet_radius_mm/SCALE)
-    update_outlet_geometry(state.outlet_y_mm/SCALE, state.outlet_z_mm/SCALE, state.outlet_radius_mm/SCALE)
+    update_inlet_geometry(state.inlet_face, state.inlet_y_mm/SCALE, state.inlet_z_mm/SCALE, state.inlet_radius_mm/SCALE)
+    update_outlet_geometry(state.outlet_face, state.outlet_y_mm/SCALE, state.outlet_z_mm/SCALE, state.outlet_radius_mm/SCALE)
 
     # Add initial meshes to plotter
     # Particles
@@ -260,8 +315,8 @@ def main():
                 solver.update_dimensions(res_x, res_y, res_z)
                 
                 update_box_geometry(res_x, res_y, res_z)
-                update_inlet_geometry(state.inlet_y_mm/SCALE, state.inlet_z_mm/SCALE, state.inlet_radius_mm/SCALE)
-                update_outlet_geometry(state.outlet_y_mm/SCALE, state.outlet_z_mm/SCALE, state.outlet_radius_mm/SCALE)
+                update_inlet_geometry(state.inlet_face, state.inlet_y_mm/SCALE, state.inlet_z_mm/SCALE, state.inlet_radius_mm/SCALE)
+                update_outlet_geometry(state.outlet_face, state.outlet_y_mm/SCALE, state.outlet_z_mm/SCALE, state.outlet_radius_mm/SCALE)
                 
                 # Plotter update
                 if box_mesh:
@@ -309,43 +364,37 @@ def main():
             # Solver Parameters Update
             # Sync Logic
             if state.is_sync:
-                state.outlet_y_mm = state.inlet_y_mm
-                state.outlet_z_mm = state.inlet_z_mm
-                state.outlet_radius_mm = state.inlet_radius_mm
+                # ユーザー指摘により、流量のみ同期（位置・サイズは独立）
                 state.outlet_flow = state.inlet_flow
             
             # Use update_params to recalculate velocities
             solver.update_params(
-                 state.inlet_y_mm / SCALE,
-                 state.outlet_y_mm / SCALE,
+                 state.inlet_face,
+                 state.outlet_face,
+                 state.inlet_y_mm / SCALE, # Generic P1 (Y or X)
+                 state.inlet_z_mm / SCALE, # Generic P2 (Z)
                  state.inlet_radius_mm / SCALE,
+                 state.outlet_y_mm / SCALE, # Generic P1
+                 state.outlet_z_mm / SCALE, # Generic P2
                  state.outlet_radius_mm / SCALE,
-                 state.inlet_z_mm / SCALE,
-                 state.outlet_z_mm / SCALE,
                  state.inlet_flow,
                  state.outlet_flow
             )
             
             # Pipe Geometry Update Check
             # Inlet
-            cur_inlet = (state.inlet_y_mm, state.inlet_z_mm, state.inlet_radius_mm)
+            cur_inlet = (state.inlet_face, state.inlet_y_mm, state.inlet_z_mm, state.inlet_radius_mm)
             if not hasattr(main, "last_inlet") or main.last_inlet != cur_inlet:
-                update_inlet_geometry(state.inlet_y_mm/SCALE, state.inlet_z_mm/SCALE, state.inlet_radius_mm/SCALE)
+                update_inlet_geometry(state.inlet_face, state.inlet_y_mm/SCALE, state.inlet_z_mm/SCALE, state.inlet_radius_mm/SCALE)
                 if inlet_mesh:
-                     # In-place update approach (safest against flickering, assuming points matching)
-                     # Since create_pipe_polydata returns same topology (16 segs), in-place is safe.
-                     # But user complained about it disappearing.
-                     # Let's try remove/add again but ONLY when changed.
-                     # "Disappearing" might have been due to previous logic bugs.
-                     # With separate actors, remove/add is safer.
                      plotter.remove_actor("pipe_inlet")
                      plotter.add_mesh(inlet_mesh, color="cyan", style="wireframe", line_width=2, name="pipe_inlet")
                 main.last_inlet = cur_inlet
             
             # Outlet
-            cur_outlet = (state.outlet_y_mm, state.outlet_z_mm, state.outlet_radius_mm)
+            cur_outlet = (state.outlet_face, state.outlet_y_mm, state.outlet_z_mm, state.outlet_radius_mm)
             if not hasattr(main, "last_outlet") or main.last_outlet != cur_outlet:
-                update_outlet_geometry(state.outlet_y_mm/SCALE, state.outlet_z_mm/SCALE, state.outlet_radius_mm/SCALE)
+                update_outlet_geometry(state.outlet_face, state.outlet_y_mm/SCALE, state.outlet_z_mm/SCALE, state.outlet_radius_mm/SCALE)
                 if outlet_mesh:
                      plotter.remove_actor("pipe_outlet")
                      plotter.add_mesh(outlet_mesh, color="red", style="wireframe", line_width=2, name="pipe_outlet")

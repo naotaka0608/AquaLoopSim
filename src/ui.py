@@ -59,8 +59,9 @@ def create_ui(state, callbacks=None):
         # タグの一意性を保証するため attr_name を使用
         slider_tag = f"{attr_name}_slider"
         input_tag = f"{attr_name}_input"
+        label_tag = f"{attr_name}_label"
         
-        dpg.add_text(label)
+        dpg.add_text(label, tag=label_tag)
         with dpg.group(horizontal=True):
             dpg.add_slider_float(
                 tag=slider_tag,
@@ -81,6 +82,27 @@ def create_ui(state, callbacks=None):
                 user_data=(slider_tag, attr_name)
             )
         dpg.add_spacer(height=3)
+
+    def update_inlet_ui_labels():
+        face = state.inlet_face
+        # 0:Left(X-), 1:Right(X+), 2:Bottom(Y-), 3:Top(Y+)
+        # If X face (0,1): Pos1=Y, Pos2=Z
+        # If Y face (2,3): Pos1=X, Pos2=Z
+        if face in [0, 1]:
+            dpg.configure_item("inlet_y_mm_label", label="Y位置 (mm)")
+            dpg.configure_item("inlet_z_mm_label", label="Z位置 (mm)")
+        else:
+            dpg.configure_item("inlet_y_mm_label", label="X位置 (mm)") # mapped to inlet_y_mm var but represents X
+            dpg.configure_item("inlet_z_mm_label", label="Z位置 (mm)")
+
+    def update_outlet_ui_labels():
+        face = state.outlet_face
+        if face in [0, 1]:
+            dpg.configure_item("outlet_y_mm_label", label="Y位置 (mm)")
+            dpg.configure_item("outlet_z_mm_label", label="Z位置 (mm)")
+        else:
+            dpg.configure_item("outlet_y_mm_label", label="X位置 (mm)")
+            dpg.configure_item("outlet_z_mm_label", label="Z位置 (mm)")
 
     # 内部コールバック
     def on_reset_particles(sender=None, app_data=None, user_data=None):
@@ -130,6 +152,14 @@ def create_ui(state, callbacks=None):
                         dpg.set_value(tag, val)
                 
                 dpg.set_value("bg_color_combo", state.background_color_mode)
+                
+                # Face Combo update
+                faces = ["0:左(X-)", "1:右(X+)", "2:底(Y-)", "3:上(Y+)"]
+                dpg.set_value("inlet_face_combo", faces[state.inlet_face])
+                dpg.set_value("outlet_face_combo", faces[state.outlet_face])
+                update_inlet_ui_labels()
+                update_outlet_ui_labels()
+                
                 if state.is_paused != (dpg.get_item_label("pause_button") == "Resume"):
                     toggle_pause()
             except:
@@ -207,12 +237,27 @@ def create_ui(state, callbacks=None):
         """流入口設定セクション"""
         with dpg.collapsing_header(label="流入口設定 (Inlet)", default_open=False):
             dpg.add_spacer(height=5)
+            
+            faces = ["0:左(X-)", "1:右(X+)", "2:底(Y-)", "3:上(Y+)"]
+            def set_inlet_face(s, a, u):
+                idx = faces.index(a)
+                state.inlet_face = idx
+                update_inlet_ui_labels()
+            
+            dpg.add_text("設置面 (Face)")
+            dpg.add_combo(items=faces, tag="inlet_face_combo", default_value=faces[state.inlet_face],
+                         callback=set_inlet_face, width=200)
+
             # 以前は slider + input
-            create_labeled_slider_with_input("Y位置 (mm)", "inlet_y_mm", state.inlet_y_mm, 20.0, 450.0)
-            create_labeled_slider_with_input("Z位置 (mm)", "inlet_z_mm", state.inlet_z_mm, 20.0, 980.0)
+            create_labeled_slider_with_input("Y位置 (mm)", "inlet_y_mm", state.inlet_y_mm, 20.0, 1000.0) # Expanded max
+            create_labeled_slider_with_input("Z位置 (mm)", "inlet_z_mm", state.inlet_z_mm, 20.0, 1000.0) # Expanded max
             create_labeled_slider_with_input("半径 (mm)", "inlet_radius_mm", state.inlet_radius_mm, 20.0, 150.0)
             create_labeled_slider_with_input("流入量", "inlet_flow", state.inlet_flow, 0.0, 2000.0)
             dpg.add_spacer(height=5)
+            
+            # 初期ラベル更新
+            update_inlet_ui_labels()
+            
         dpg.add_separator()
 
     def _create_outlet_section():
@@ -221,12 +266,25 @@ def create_ui(state, callbacks=None):
             dpg.add_spacer(height=5)
             dpg.add_checkbox(label="流入口と同期", tag="sync_checkbox", default_value=state.is_sync,
                            callback=lambda s, a: setattr(state, 'is_sync', a))
-                           
-            create_labeled_slider_with_input("Y位置 (mm)", "outlet_y_mm", state.outlet_y_mm, 20.0, 450.0)
-            create_labeled_slider_with_input("Z位置 (mm)", "outlet_z_mm", state.outlet_z_mm, 20.0, 980.0)
+
+            faces = ["0:左(X-)", "1:右(X+)", "2:底(Y-)", "3:上(Y+)"]
+            def set_outlet_face(s, a, u):
+                idx = faces.index(a)
+                state.outlet_face = idx
+                update_outlet_ui_labels()
+
+            dpg.add_text("設置面 (Face)")
+            dpg.add_combo(items=faces, tag="outlet_face_combo", default_value=faces[state.outlet_face],
+                         callback=set_outlet_face, width=200)
+
+            create_labeled_slider_with_input("Y位置 (mm)", "outlet_y_mm", state.outlet_y_mm, 20.0, 1000.0)
+            create_labeled_slider_with_input("Z位置 (mm)", "outlet_z_mm", state.outlet_z_mm, 20.0, 1000.0)
             create_labeled_slider_with_input("半径 (mm)", "outlet_radius_mm", state.outlet_radius_mm, 20.0, 150.0)
             create_labeled_slider_with_input("流出量", "outlet_flow", state.outlet_flow, 0.0, 2000.0)
             dpg.add_spacer(height=5)
+            
+            # 初期ラベル更新
+            update_outlet_ui_labels()
         dpg.add_separator()
 
     def _create_particle_section():
