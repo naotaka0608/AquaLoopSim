@@ -3,6 +3,7 @@ __pycache__/
 *.py[oc]
 build/
 dist/
+dist_nuitka/
 wheels/
 *.egg-info
 
@@ -54,3 +55,9 @@ tmp/
 
 # Lock files (optional - comment out if you want to track)
 # uv.lock
+
+# Agent artifacts
+.gemini/
+
+# PyInstaller spec
+*.spec

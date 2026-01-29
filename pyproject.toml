@@ -10,4 +10,5 @@ dependencies = [
     "dearpygui>=2.0.0",
     "pyvista[all]>=0.43.0",
     "pyinstaller>=6.0.0",
+    "cupy-cuda13x>=13.6.0",
 ]
