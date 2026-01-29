@@ -348,6 +348,12 @@ __global__ void advect_particles(
         vel_arr[i*3] = 0.0f;
         vel_arr[i*3+1] = 0.0f;
         vel_arr[i*3+2] = 0.0f;
+        
+        // Mark as Recycled (Tracer) and turn Pink
+        absorbed_arr[i] = 2; 
+        color_arr[i*3] = 1.0f; 
+        color_arr[i*3+1] = 0.0f; 
+        color_arr[i*3+2] = 1.0f;
     }
     
     // Store back
@@ -374,10 +380,10 @@ __global__ void advect_particles(
              if (outlet_face < 2) d_out = (p_next.y - outlet_y)*(p_next.y - outlet_y) + (p_next.z - outlet_z)*(p_next.z - outlet_z);
              else d_out = (p_next.x - outlet_y)*(p_next.x - outlet_y) + (p_next.z - outlet_z)*(p_next.z - outlet_z);
              
-             if (d_out < outlet_radius * outlet_radius * 2.25f) {
+             if (d_out < outlet_radius * outlet_radius * 1.0f) {
                  is_in_pipe = true;
                  is_outlet_pipe = true;
-             } else if (d_in < inlet_radius * inlet_radius * 2.25f) {
+             } else if (d_in < inlet_radius * inlet_radius * 1.0f) {
                  is_in_pipe = true;
                  is_outlet_pipe = false;
              }
@@ -387,8 +393,9 @@ __global__ void advect_particles(
         
         if (is_in_pipe) {
             if (is_outlet_pipe) {
-                r = 1.0f; g = 0.0f; b = 1.0f; // Magenta
-                absorbed_arr[i] = 1; // Mark as recycled/absorbed to freeze color
+                // Sucked in: Turn Blue/Dark (Hide) and Mark as Absorbed(1)
+                r = 0.1f; g = 0.1f; b = 0.5f; 
+                absorbed_arr[i] = 1; 
             } else {
                 r = 0.0f; g = 1.0f; b = 0.5f; // Cyan
             }
@@ -519,6 +526,13 @@ class FluidSolverGPU:
         self.particle_color_gpu[:] = 0.0
         self.particle_color_gpu[1::3] = 1.0
         self.particle_color_gpu[2::3] = 1.0
+        
+        # Reset other states explicitly (Critical for Reset button)
+        self.particle_vel_gpu[:] = 0.0
+        self.particle_absorbed_gpu[:] = 0
+        self.particle_life_gpu[:] = cp.random.rand(self.num_particles, dtype=cp.float32)
+        self.trail_index_gpu[:] = 0
+        self.trail_positions_gpu[:] = 0.0  # Trails will streak from 0 for first few frames, acceptable
         
     def update_params(self, inlet_face, outlet_face, in_y, out_y, in_rad, out_rad, in_z, out_z, in_flow_lpm, out_flow_lpm):
         self.inlet_face = int(inlet_face)
