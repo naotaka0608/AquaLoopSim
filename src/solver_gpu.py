@@ -357,14 +357,51 @@ __global__ void advect_particles(
     
     // Color Update
     if (absorbed_arr[i] == 0) {
-        float speed = sqrt(vel.x*vel.x + vel.y*vel.y + vel.z*vel.z);
-        float max_v = (inlet_velocity < 50.0f) ? 50.0f : inlet_velocity;
-        float t = speed / max_v;
-        if (t > 1.0f) t = 1.0f;
-        if (should_recycle) t = 0.0f; // New particles are slow
+        bool in_tank_next = (p_next.x >= 0 && p_next.x < res_x &&
+                             p_next.y >= 0 && p_next.y < res_y &&
+                             p_next.z >= 0 && p_next.z < res_z);
+                             
+        bool is_in_pipe = false;
+        bool is_outlet_pipe = false;
+        
+        if (!in_tank_next) {
+             float d_in = 1.0e9f;
+             float d_out = 1.0e9f;
+             
+             if (inlet_face < 2) d_in = (p_next.y - inlet_y)*(p_next.y - inlet_y) + (p_next.z - inlet_z)*(p_next.z - inlet_z);
+             else d_in = (p_next.x - inlet_y)*(p_next.x - inlet_y) + (p_next.z - inlet_z)*(p_next.z - inlet_z);
+             
+             if (outlet_face < 2) d_out = (p_next.y - outlet_y)*(p_next.y - outlet_y) + (p_next.z - outlet_z)*(p_next.z - outlet_z);
+             else d_out = (p_next.x - outlet_y)*(p_next.x - outlet_y) + (p_next.z - outlet_z)*(p_next.z - outlet_z);
+             
+             if (d_out < outlet_radius * outlet_radius * 2.25f) {
+                 is_in_pipe = true;
+                 is_outlet_pipe = true;
+             } else if (d_in < inlet_radius * inlet_radius * 2.25f) {
+                 is_in_pipe = true;
+                 is_outlet_pipe = false;
+             }
+        }
         
         float r, g, b;
-        apply_colormap_gpu(t, colormap_mode, &r, &g, &b);
+        
+        if (is_in_pipe) {
+            if (is_outlet_pipe) {
+                r = 1.0f; g = 0.0f; b = 1.0f; // Magenta
+                absorbed_arr[i] = 1; // Mark as recycled/absorbed to freeze color
+            } else {
+                r = 0.0f; g = 1.0f; b = 0.5f; // Cyan
+            }
+        } else {
+            float speed = sqrt(vel.x*vel.x + vel.y*vel.y + vel.z*vel.z);
+            float max_v = (inlet_velocity < 50.0f) ? 50.0f : inlet_velocity;
+            float t = speed / max_v;
+            if (t > 1.0f) t = 1.0f;
+            if (should_recycle) t = 0.0f; 
+            
+            apply_colormap_gpu(t, colormap_mode, &r, &g, &b);
+        }
+        
         color_arr[i*3] = r;
         color_arr[i*3+1] = g;
         color_arr[i*3+2] = b;
