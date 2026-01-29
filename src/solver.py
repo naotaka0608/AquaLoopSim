@@ -78,7 +78,8 @@ def trilinear_interp(velocity, base_x, base_y, base_z, frac_x, frac_y, frac_z, r
 
 
 @njit(cache=True)
-def sample_velocity_single(velocity, pos, res, inlet_y, inlet_z, inlet_radius, inlet_velocity,
+def sample_velocity_single(velocity, pos, res, inlet_face, outlet_face, 
+                           inlet_y, inlet_z, inlet_radius, inlet_velocity,
                            outlet_y, outlet_z, outlet_radius, outlet_velocity):
     """単一位置での速度サンプリング"""
     vel = np.zeros(3)
@@ -96,15 +97,43 @@ def sample_velocity_single(velocity, pos, res, inlet_y, inlet_z, inlet_radius, i
         
         vel = trilinear_interp(velocity, base_x, base_y, base_z, frac_x, frac_y, frac_z, res)
         
-    elif pos[0] < 0:
-        # Pipe logic
-        dz_in = abs(pos[2] - inlet_z)
-        dz_out = abs(pos[2] - outlet_z)
+    else:
+        # Pipe logic (checking if outside tank boundaries)
+        in_inlet = False
+        in_outlet = False
         
-        if abs(pos[1] - inlet_y) < (inlet_radius * 1.5) and dz_in < (inlet_radius * 1.5):
-            vel[0] = inlet_velocity
-        elif abs(pos[1] - outlet_y) < (outlet_radius * 1.5) and dz_out < (outlet_radius * 1.5):
-            vel[0] = -outlet_velocity
+        # Check Inlet Pipe
+        if inlet_face == 0 and pos[0] < 0:
+            if abs(pos[1] - inlet_y) < (inlet_radius * 1.5) and abs(pos[2] - inlet_z) < (inlet_radius * 1.5):
+                in_inlet = True
+                vel[0] = inlet_velocity
+        elif inlet_face == 1 and pos[0] >= res[0] - 1:
+            if abs(pos[1] - inlet_y) < (inlet_radius * 1.5) and abs(pos[2] - inlet_z) < (inlet_radius * 1.5):
+                in_inlet = True
+                vel[0] = -inlet_velocity
+        elif inlet_face == 2 and pos[1] < 0:
+            if abs(pos[0] - inlet_y) < (inlet_radius * 1.5) and abs(pos[2] - inlet_z) < (inlet_radius * 1.5):
+                in_inlet = True
+                vel[1] = inlet_velocity
+        elif inlet_face == 3 and pos[1] >= res[1] - 1:
+            if abs(pos[0] - inlet_y) < (inlet_radius * 1.5) and abs(pos[2] - inlet_z) < (inlet_radius * 1.5):
+                in_inlet = True
+                vel[1] = -inlet_velocity
+                
+        # Check Outlet Pipe
+        if not in_inlet:
+            if outlet_face == 0 and pos[0] < 0:
+                if abs(pos[1] - outlet_y) < (outlet_radius * 1.5) and abs(pos[2] - outlet_z) < (outlet_radius * 1.5):
+                    vel[0] = -outlet_velocity
+            elif outlet_face == 1 and pos[0] >= res[0] - 1:
+                if abs(pos[1] - outlet_y) < (outlet_radius * 1.5) and abs(pos[2] - outlet_z) < (outlet_radius * 1.5):
+                    vel[0] = outlet_velocity
+            elif outlet_face == 2 and pos[1] < 0:
+                if abs(pos[0] - outlet_y) < (outlet_radius * 1.5) and abs(pos[2] - outlet_z) < (outlet_radius * 1.5):
+                    vel[1] = -outlet_velocity
+            elif outlet_face == 3 and pos[1] >= res[1] - 1:
+                if abs(pos[0] - outlet_y) < (outlet_radius * 1.5) and abs(pos[2] - outlet_z) < (outlet_radius * 1.5):
+                    vel[1] = outlet_velocity
     
     return vel
 
@@ -133,7 +162,8 @@ def init_particles_kernel(particle_pos, particle_vel, particle_color, particle_l
 
 
 @njit(cache=True, parallel=True)
-def advect_kernel(velocity, new_velocity, dt, res, inlet_y, inlet_z, inlet_radius, inlet_velocity,
+def advect_kernel(velocity, new_velocity, dt, res, inlet_face, outlet_face, 
+                  inlet_y, inlet_z, inlet_radius, inlet_velocity,
                   outlet_y, outlet_z, outlet_radius, outlet_velocity):
     """速度場の移流"""
     for i in prange(res[0]):
@@ -141,7 +171,8 @@ def advect_kernel(velocity, new_velocity, dt, res, inlet_y, inlet_z, inlet_radiu
             for k in range(res[2]):
                 pos = np.array([i + 0.5, j + 0.5, k + 0.5])
                 p_back = pos - velocity[i, j, k] * dt
-                val = sample_velocity_single(velocity, p_back, res, inlet_y, inlet_z, inlet_radius, inlet_velocity,
+                val = sample_velocity_single(velocity, p_back, res, inlet_face, outlet_face,
+                                            inlet_y, inlet_z, inlet_radius, inlet_velocity,
                                             outlet_y, outlet_z, outlet_radius, outlet_velocity)
                 new_velocity[i, j, k, 0] = val[0]
                 new_velocity[i, j, k, 1] = val[1]
@@ -329,6 +360,7 @@ def project_kernel(velocity, pressure, res):
 @njit(cache=True, parallel=True)
 def advect_particles_kernel(particle_pos, particle_vel, particle_color, particle_absorbed,
                             trail_positions, trail_index, velocity, res, dt,
+                            inlet_face, outlet_face,
                             inlet_y, inlet_z, inlet_radius, inlet_velocity,
                             outlet_y, outlet_z, outlet_radius, outlet_velocity,
                             num_particles, trail_length, colormap_mode,
@@ -336,30 +368,55 @@ def advect_particles_kernel(particle_pos, particle_vel, particle_color, particle
     """粒子移流（メインカーネル）"""
     for i in prange(num_particles):
         pos = np.array([particle_pos[i, 0], particle_pos[i, 1], particle_pos[i, 2]])
-        vel = sample_velocity_single(velocity, pos, res, inlet_y, inlet_z, inlet_radius, inlet_velocity,
+        vel = sample_velocity_single(velocity, pos, res, inlet_face, outlet_face,
+                                     inlet_y, inlet_z, inlet_radius, inlet_velocity,
                                      outlet_y, outlet_z, outlet_radius, outlet_velocity)
         
-        # Circulation forcing
-        if pos[0] >= 0:
-            # Outlet suction
+        # Determine inlet/outlet positions based on face
+        # Face 0: Left (X-), Face 1: Right (X+), Face 2: Bottom (Y-), Face 3: Top (Y+)
+        if inlet_face == 0:
+            inlet_pos = np.array([0.0, inlet_y, inlet_z])
+        elif inlet_face == 1:
+            inlet_pos = np.array([float(res[0]), inlet_y, inlet_z])
+        elif inlet_face == 2:
+            inlet_pos = np.array([inlet_y, 0.0, inlet_z])
+        else:
+            inlet_pos = np.array([inlet_y, float(res[1]), inlet_z])
+        
+        if outlet_face == 0:
             outlet_pos = np.array([0.0, outlet_y, outlet_z])
+        elif outlet_face == 1:
+            outlet_pos = np.array([float(res[0]), outlet_y, outlet_z])
+        elif outlet_face == 2:
+            outlet_pos = np.array([outlet_y, 0.0, outlet_z])
+        else:
+            outlet_pos = np.array([outlet_y, float(res[1]), outlet_z])
+        
+        # Check if particle is inside the tank
+        in_tank = (pos[0] >= 0 and pos[0] < res[0] and
+                   pos[1] >= 0 and pos[1] < res[1] and
+                   pos[2] >= 0 and pos[2] < res[2])
+        
+        if in_tank:
+            # Outlet suction
             to_outlet = outlet_pos - pos
             dist_to_outlet = np.sqrt(to_outlet[0]**2 + to_outlet[1]**2 + to_outlet[2]**2)
             
-            suction_range = res[0] * 0.5
+            suction_range = max(res[0], res[1]) * 0.5
             if dist_to_outlet < suction_range and dist_to_outlet > 0.1:
                 suction_strength = outlet_velocity * 0.05 * (1.0 - dist_to_outlet / suction_range)
                 vel = vel + (to_outlet / dist_to_outlet) * suction_strength
             
             # Inlet jet boost
-            inlet_pos = np.array([0.0, inlet_y, inlet_z])
             to_inlet = pos - inlet_pos
             dist_to_inlet = np.sqrt(to_inlet[0]**2 + to_inlet[1]**2 + to_inlet[2]**2)
             
-            jet_range = res[0] * 0.3
-            if dist_to_inlet < jet_range and dist_to_inlet > 0.1 and pos[0] < res[0] * 0.3:
+            jet_range = max(res[0], res[1]) * 0.3
+            if dist_to_inlet < jet_range and dist_to_inlet > 0.1:
                 jet_boost = inlet_velocity * 0.03 * (1.0 - dist_to_inlet / jet_range)
-                vel[0] += jet_boost
+                # Apply boost in direction away from inlet
+                if dist_to_inlet > 0.1:
+                    vel = vel + (to_inlet / dist_to_inlet) * jet_boost
             
             # Anti-stagnation jitter
             speed = np.sqrt(vel[0]**2 + vel[1]**2 + vel[2]**2)
@@ -375,57 +432,119 @@ def advect_particles_kernel(particle_pos, particle_vel, particle_color, particle
         p_next = pos + vel * dt
         
         # Recycle particles
-        if p_next[0] < -20.0:
-            p_next[0] = -20.0
-            p_next[1] = inlet_y + (np.random.random() - 0.5) * (inlet_radius * 0.8)
-            p_next[2] = inlet_z + (np.random.random() - 0.5) * (inlet_radius * 0.8)
+        # Check if particle is deep in the outlet pipe
+        should_recycle = False
         
+        # Calculate depth in outlet pipe
+        outlet_depth = 0.0
+        if outlet_face == 0: # Left
+            outlet_depth = -p_next[0]
+        elif outlet_face == 1: # Right
+            outlet_depth = p_next[0] - res[0]
+        elif outlet_face == 2: # Bottom
+            outlet_depth = -p_next[1]
+        elif outlet_face == 3: # Top
+            outlet_depth = p_next[1] - res[1]
+            
+        if outlet_depth > 20.0:
+            should_recycle = True
+            
+        # Also recycle if deep in inlet pipe (backflow protection)
+        inlet_depth = 0.0
+        if inlet_face == 0: inlet_depth = -p_next[0]
+        elif inlet_face == 1: inlet_depth = p_next[0] - res[0]
+        elif inlet_face == 2: inlet_depth = -p_next[1]
+        elif inlet_face == 3: inlet_depth = p_next[1] - res[1]
+            
+        if inlet_depth > 20.0:
+            should_recycle = True
+
+        if should_recycle:
+            # Respawn at inlet start
+            # Random position within inlet radius
+            r = np.sqrt(np.random.random()) * (inlet_radius * 0.8)
+            theta = np.random.random() * 2 * np.pi
+            u = r * np.cos(theta)
+            v = r * np.sin(theta)
+            
+            if inlet_face == 0: # Left
+                p_next[0] = -19.0
+                p_next[1] = inlet_y + u
+                p_next[2] = inlet_z + v
+            elif inlet_face == 1: # Right
+                p_next[0] = res[0] + 19.0
+                p_next[1] = inlet_y + u
+                p_next[2] = inlet_z + v
+            elif inlet_face == 2: # Bottom
+                p_next[0] = inlet_y + u
+                p_next[1] = -19.0
+                p_next[2] = inlet_z + v
+            elif inlet_face == 3: # Top
+                p_next[0] = inlet_y + u
+                p_next[1] = res[1] + 19.0
+                p_next[2] = inlet_z + v
+                
+            # Reset velocity
+            vel[0] = 0.0
+            vel[1] = 0.0
+            vel[2] = 0.0
+            
         margin = 2.0
         kick = 20.0
         
-        if p_next[0] >= 0:
-            dist_sq_in = (p_next[1] - inlet_y)**2 + (p_next[2] - inlet_z)**2
-            dist_sq_out = (p_next[1] - outlet_y)**2 + (p_next[2] - outlet_z)**2
-            in_hole_inlet = dist_sq_in < inlet_radius**2
-            in_hole_outlet = dist_sq_out < outlet_radius**2
+        if in_tank:
+            # Helper: check if position is inside inlet/outlet hole on a given face
+            # For X faces: use p_next[1], p_next[2] vs inlet_y, inlet_z
+            # For Y faces: use p_next[0], p_next[2] vs inlet_y, inlet_z
+            in_hole_inlet_x = (p_next[1] - inlet_y)**2 + (p_next[2] - inlet_z)**2 < inlet_radius**2
+            in_hole_outlet_x = (p_next[1] - outlet_y)**2 + (p_next[2] - outlet_z)**2 < outlet_radius**2
+            in_hole_inlet_y = (p_next[0] - inlet_y)**2 + (p_next[2] - inlet_z)**2 < inlet_radius**2
+            in_hole_outlet_y = (p_next[0] - outlet_y)**2 + (p_next[2] - outlet_z)**2 < outlet_radius**2
             
-            # Left wall
+            # Left wall (X=0)
             if p_next[0] < margin:
-                if not (in_hole_inlet or in_hole_outlet):
+                has_hole = (inlet_face == 0 and in_hole_inlet_x) or (outlet_face == 0 and in_hole_outlet_x)
+                if not has_hole:
                     p_next[0] = margin
                     vel[0] *= -0.8
                     vel[1] += (np.random.random() - 0.5) * kick
                     vel[2] += (np.random.random() - 0.5) * kick
             
-            # Right wall
+            # Right wall (X=res[0])
             if p_next[0] > res[0] - margin:
-                p_next[0] = res[0] - margin
-                vel[0] *= -0.8
-                vel[1] += (np.random.random() - 0.5) * kick
-                vel[2] += (np.random.random() - 0.5) * kick
+                has_hole = (inlet_face == 1 and in_hole_inlet_x) or (outlet_face == 1 and in_hole_outlet_x)
+                if not has_hole:
+                    p_next[0] = res[0] - margin
+                    vel[0] *= -0.8
+                    vel[1] += (np.random.random() - 0.5) * kick
+                    vel[2] += (np.random.random() - 0.5) * kick
             
-            # Floor
+            # Floor (Y=0)
             if p_next[1] < margin:
-                p_next[1] = margin
-                vel[1] *= -0.8
-                vel[0] += (np.random.random() - 0.5) * kick
-                vel[2] += (np.random.random() - 0.5) * kick
+                has_hole = (inlet_face == 2 and in_hole_inlet_y) or (outlet_face == 2 and in_hole_outlet_y)
+                if not has_hole:
+                    p_next[1] = margin
+                    vel[1] *= -0.8
+                    vel[0] += (np.random.random() - 0.5) * kick
+                    vel[2] += (np.random.random() - 0.5) * kick
             
-            # Ceiling
+            # Ceiling (Y=res[1])
             if p_next[1] > res[1] - margin:
-                p_next[1] = res[1] - margin
-                vel[1] *= -0.8
-                vel[0] += (np.random.random() - 0.5) * kick
-                vel[2] += (np.random.random() - 0.5) * kick
+                has_hole = (inlet_face == 3 and in_hole_inlet_y) or (outlet_face == 3 and in_hole_outlet_y)
+                if not has_hole:
+                    p_next[1] = res[1] - margin
+                    vel[1] *= -0.8
+                    vel[0] += (np.random.random() - 0.5) * kick
+                    vel[2] += (np.random.random() - 0.5) * kick
             
-            # Back wall
+            # Back wall (Z=0) - no holes
             if p_next[2] < margin:
                 p_next[2] = margin
                 vel[2] *= -0.8
                 vel[0] += (np.random.random() - 0.5) * kick
                 vel[1] += (np.random.random() - 0.5) * kick
             
-            # Front wall
+            # Front wall (Z=res[2]) - no holes
             if p_next[2] > res[2] - margin:
                 p_next[2] = res[2] - margin
                 vel[2] *= -0.8
@@ -526,14 +645,46 @@ def advect_particles_kernel(particle_pos, particle_vel, particle_color, particle
         particle_pos[i, 2] = p_next[2]
         
         # Color update
+        # Color update
         if particle_absorbed[i] == 0:
-            if p_next[0] < 0:
-                if abs(p_next[1] - outlet_y) < (outlet_radius * 1.5) and abs(p_next[2] - outlet_z) < (outlet_radius * 1.5):
+            # Check if inside tank
+            in_tank_next = (p_next[0] >= 0 and p_next[0] < res[0] and
+                           p_next[1] >= 0 and p_next[1] < res[1] and
+                           p_next[2] >= 0 and p_next[2] < res[2])
+            
+            is_in_pipe = False
+            is_outlet_pipe = False
+            
+            if not in_tank_next:
+                # Check distances to pipe axes
+                d_in = 1.0e9
+                d_out = 1.0e9
+                
+                if inlet_face < 2: # X faces
+                    d_in = (p_next[1] - inlet_y)**2 + (p_next[2] - inlet_z)**2
+                else: # Y faces
+                    d_in = (p_next[0] - inlet_y)**2 + (p_next[2] - inlet_z)**2
+                    
+                if outlet_face < 2: # X faces
+                    d_out = (p_next[1] - outlet_y)**2 + (p_next[2] - outlet_z)**2
+                else: # Y faces
+                    d_out = (p_next[0] - outlet_y)**2 + (p_next[2] - outlet_z)**2
+                
+                # Check tolerance (radius * 1.5 squared is 2.25 * r^2)
+                if d_out < outlet_radius**2 * 2.25:
+                    is_in_pipe = True
+                    is_outlet_pipe = True
+                elif d_in < inlet_radius**2 * 2.25:
+                    is_in_pipe = True
+                    is_outlet_pipe = False
+            
+            if is_in_pipe:
+                if is_outlet_pipe:
                     particle_absorbed[i] = 1
                     particle_color[i, 0] = 1.0
                     particle_color[i, 1] = 0.0
                     particle_color[i, 2] = 1.0
-                elif abs(p_next[1] - inlet_y) < (inlet_radius * 1.5) and abs(p_next[2] - inlet_z) < (inlet_radius * 1.5):
+                else:
                     particle_color[i, 0] = 0.0
                     particle_color[i, 1] = 1.0
                     particle_color[i, 2] = 0.5
@@ -639,6 +790,7 @@ class FluidSolver:
     
     def advect(self):
         advect_kernel(self.velocity, self.new_velocity, self.dt, self.res,
+                     self.inlet_face, self.outlet_face,
                      self.inlet_y, self.inlet_z, self.inlet_radius, self.inlet_velocity,
                      self.outlet_y, self.outlet_z, self.outlet_radius, self.outlet_velocity)
         self.velocity[:] = self.new_velocity
@@ -669,6 +821,7 @@ class FluidSolver:
         advect_particles_kernel(self.particle_pos, self.particle_vel, self.particle_color,
                                self.particle_absorbed, self.trail_positions, self.trail_index,
                                self.velocity, self.res, self.dt,
+                               self.inlet_face, self.outlet_face,
                                self.inlet_y, self.inlet_z, self.inlet_radius, self.inlet_velocity,
                                self.outlet_y, self.outlet_z, self.outlet_radius, self.outlet_velocity,
                                self.num_particles, self.trail_length, self.colormap_mode,
