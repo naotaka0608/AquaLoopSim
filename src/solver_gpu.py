@@ -4,7 +4,6 @@ import math
 
 try:
     import cupy as cp
-    import cupyx.scipy.ndimage
     HAS_CUPY = True
 except ImportError:
     HAS_CUPY = False
@@ -502,7 +501,7 @@ class FluidSolverGPU:
         self.trail_index_gpu = cp.zeros(num_particles, dtype=cp.int32)
         
         # Helper arrays for mesh generation (Host needs Nx3)
-        self.params = {} # Store params
+        # self.params removed as it was unused
         
         # Obstacles
         self.max_obstacles = 10
