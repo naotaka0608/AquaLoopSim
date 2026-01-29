@@ -6,127 +6,11 @@ import datetime
 import pyvista as pv
 from src.config import *
 from src.config import DEFAULT_NUM_PARTICLES, MIN_NUM_PARTICLES, MAX_NUM_PARTICLES
-from src.solver import FluidSolver
+from src.state import AppState
+from src.solver import FluidSolver, HAS_CUPY
 
 # Global State
-class AppState:
-    def __init__(self):
-        self.tank_width = 1000.0
-        self.tank_height = 500.0
-        self.tank_depth = 1000.0
-        
-        # 0=Left(X-), 1=Right(X+), 2=Bottom(Y-), 3=Top(Y+)
-        self.inlet_face = 0
-        self.outlet_face = 1
-        
-        self.inlet_y_mm = 100.0
-        self.inlet_z_mm = 500.0
-        self.inlet_radius_mm = 60.0
-        
-        self.outlet_y_mm = 400.0
-        self.outlet_z_mm = 500.0
-        self.outlet_radius_mm = 60.0
-        
-        self.inlet_flow = 500.0
-        self.outlet_flow = 500.0
-        self.is_sync = True
-        
-        self.current_num_particles = DEFAULT_NUM_PARTICLES
-        self.target_num_particles = DEFAULT_NUM_PARTICLES
-        
-        self.needs_dimension_update = False
-        self.needs_particle_reset = False
-        self.needs_particle_count_update = False
-        
-        # 視覚化設定
-        self.colormap_mode = 0  # 0=Blue-Red, 1=Rainbow, 2=Cool-Warm, 3=Viridis
-        self.background_color_mode = "Black" # Black, Dark Gray, Light Gray, White, Paraview Blue
-        self.particle_size = 8.0 # PyVista uses point size, not radius
-        self.show_trails = False
-        self.show_tank_walls = True
-        
-        # シミュレーション制御 (5, 6)
-        self.is_paused = False
-        self.sim_speed = 1.0  # 0.25, 0.5, 1.0, 2.0, 4.0
-        
-        # 追加ポート (7) - 2番目のInlet/Outlet
-        self.use_second_inlet = False
-        self.inlet2_y_mm = 200.0
-        self.inlet2_z_mm = 300.0
-        self.inlet2_radius_mm = 40.0
-        self.inlet2_flow = 300.0
-        
-        self.use_second_outlet = False
-        self.outlet2_y_mm = 300.0
-        self.outlet2_z_mm = 700.0
-        self.outlet2_radius_mm = 40.0
-        self.outlet2_flow = 300.0
-        
-        # 障害物 (8)
-        self.obstacles = []  # リスト of {type, x, y, z, size}
-        self.show_obstacles = True
-        
-        # 分析ツール (9, 10, 11)
-        # 流量計表示
-        self.show_flow_meter = True
-        self.inlet_particle_count = 0
-        self.outlet_particle_count = 0
-        
-        # 断面ビュー
-        self.show_cross_section = False
-        self.cross_section_axis = 'X'  # X, Y, Z
-        self.cross_section_pos = 50.0  # % (0-100)
-        
-        # スクリーンショット/録画
-        self.screenshot_dir = "./screenshots"
-        self.is_recording = False
-        self.recording_frames = []
-        self.frame_count = 0
-        
-        # シミュレーション経過時間
-        self.sim_elapsed_time = 0.0  # 秒
-    
-    def to_dict(self):
-        """保存用の辞書に変換"""
-        return {
-            'tank_width': self.tank_width,
-            'tank_height': self.tank_height,
-            'tank_depth': self.tank_depth,
-            'inlet_face': self.inlet_face,
-            'outlet_face': self.outlet_face,
-            'inlet_y_mm': self.inlet_y_mm,
-            'inlet_z_mm': self.inlet_z_mm,
-            'inlet_radius_mm': self.inlet_radius_mm,
-            'outlet_y_mm': self.outlet_y_mm,
-            'outlet_z_mm': self.outlet_z_mm,
-            'outlet_radius_mm': self.outlet_radius_mm,
-            'inlet_flow': self.inlet_flow,
-            'outlet_flow': self.outlet_flow,
-            'is_sync': self.is_sync,
-            'target_num_particles': self.target_num_particles,
-            'colormap_mode': self.colormap_mode,
-            'background_color_mode': self.background_color_mode,
-            'particle_size': self.particle_size,
-            'show_tank_walls': self.show_tank_walls,
-            'sim_speed': self.sim_speed,
-            'use_second_inlet': self.use_second_inlet,
-            'inlet2_y_mm': self.inlet2_y_mm,
-            'inlet2_z_mm': self.inlet2_z_mm,
-            'inlet2_radius_mm': self.inlet2_radius_mm,
-            'inlet2_flow': self.inlet2_flow,
-            'use_second_outlet': self.use_second_outlet,
-            'outlet2_y_mm': self.outlet2_y_mm,
-            'outlet2_z_mm': self.outlet2_z_mm,
-            'outlet2_radius_mm': self.outlet2_radius_mm,
-            'outlet2_flow': self.outlet2_flow,
-            'obstacles': self.obstacles,
-        }
-    
-    def from_dict(self, data):
-        """辞書からパラメータを読み込み"""
-        for key, value in data.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
+# AppState class definition moved to src/state.py
 
 # 設定ファイルパス
 CONFIG_FILE = "./config.json"
@@ -434,6 +318,28 @@ def _create_outlet_section():
     dpg.add_separator()
 
 
+def _create_compute_section():
+    """計算設定セクション"""
+    with dpg.collapsing_header(label="計算設定 (Compute)", default_open=True):
+        dpg.add_spacer(height=5)
+        
+        # Device Selection
+        devices = ["CPU"]
+        if HAS_CUPY:
+            devices.append("GPU")
+        
+        def change_device(sender, app_data, user_data):
+            state.compute_device = app_data
+            state.needs_device_update = True
+            
+        dpg.add_combo(label="計算デバイス", items=devices, default_value=state.compute_device, callback=change_device)
+        if not HAS_CUPY:
+            dpg.add_text("※ GPUを使用するには cupy-cudaXX のインストールが必要です", color=(255, 100, 100))
+            
+        dpg.add_spacer(height=5)
+    dpg.add_separator()
+
+
 def _create_particle_section():
     """粒子設定セクション"""
     with dpg.collapsing_header(label="粒子設定", default_open=False):
@@ -727,6 +633,7 @@ def setup_dpg_ui():
         _create_tank_section()
         _create_inlet_section()
         _create_outlet_section()
+        _create_compute_section()
         _create_particle_section()
         _create_visualization_section()
         # _create_simulation_control_section() は上に移動したため削除
@@ -885,7 +792,8 @@ def main():
     res_y = int(state.tank_height / SCALE)
     res_z = int(state.tank_depth / SCALE)
     
-    solver = FluidSolver(res_x, res_y, res_z, state.current_num_particles)
+    backend = state.compute_device.lower()
+    solver = FluidSolver(res_x, res_y, res_z, state.current_num_particles, backend=backend)
     update_box_geometry(res_x, res_y, res_z)
     update_pipe_geometry(
         state.inlet_face, state.outlet_face,
@@ -989,7 +897,8 @@ def main():
                 res_x = int(state.tank_width / SCALE)
                 res_y = int(state.tank_height / SCALE)
                 res_z = int(state.tank_depth / SCALE)
-                solver = FluidSolver(res_x, res_y, res_z, state.current_num_particles)
+                backend = state.compute_device.lower()
+                solver = FluidSolver(res_x, res_y, res_z, state.current_num_particles, backend=backend)
                 update_box_geometry(res_x, res_y, res_z)
                 
                 # メッシュ再登録
@@ -1018,7 +927,8 @@ def main():
             if state.needs_particle_count_update:
                 if state.target_num_particles != state.current_num_particles:
                     state.current_num_particles = state.target_num_particles
-                    solver = FluidSolver(res_x, res_y, res_z, state.current_num_particles)
+                    backend = state.compute_device.lower()
+                    solver = FluidSolver(res_x, res_y, res_z, state.current_num_particles, backend=backend)
                     
                     # メッシュ更新
                     particles_mesh = pv.PolyData(solver.particle_pos)
@@ -1030,6 +940,20 @@ def main():
                     except:
                         pass
                 state.needs_particle_count_update = False
+            
+            # デバイス更新チェック
+            if state.needs_device_update:
+                backend = state.compute_device.lower()
+                # 既存の状態を維持したい場合はここで転送が必要だが、今回はリセットする
+                solver = FluidSolver(res_x, res_y, res_z, state.current_num_particles, backend=backend)
+                
+                # メッシュ更新
+                particles_mesh = pv.PolyData(solver.particle_pos)
+                particles_mesh.point_data["rgb"] = solver.particle_color
+                particles_actor = plotter.add_mesh(particles_mesh, scalars="rgb", rgb=True, point_size=state.particle_size, style='points', render_points_as_spheres=False, name="particles")
+                
+                state.sim_elapsed_time = 0.0
+                state.needs_device_update = False
             
             # パイプジオメトリ更新
             update_pipe_geometry(
