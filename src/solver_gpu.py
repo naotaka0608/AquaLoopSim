@@ -170,7 +170,6 @@ __global__ void advect_particles(
     float inlet_y, float inlet_z, float inlet_radius, float inlet_velocity,
     float outlet_y, float outlet_z, float outlet_radius, float outlet_velocity,
     int num_particles, int trail_length, int colormap_mode,
-    const float* obstacle_data, int num_obstacles,
     unsigned int frame_seed
 ) {
     int i = blockDim.x * blockIdx.x + threadIdx.x;
@@ -183,6 +182,9 @@ __global__ void advect_particles(
     float3 vel = sample_velocity_single(velocity, pos.x, pos.y, pos.z, res_x, res_y, res_z, 
                                         inlet_face, outlet_face, inlet_y, inlet_z, inlet_radius, inlet_velocity,
                                         outlet_y, outlet_z, outlet_radius, outlet_velocity);
+                                        
+    // Forces (Inlet/Outlet) - simplified logic (OMITTED UNCHANGED LINES...)
+
                                         
     // Forces (Inlet/Outlet) - simplified logic
     bool in_tank = (pos.x >= 0 && pos.x < res_x && pos.y >= 0 && pos.y < res_y && pos.z >= 0 && pos.z < res_z);
@@ -303,6 +305,61 @@ __global__ void advect_particles(
          vel.z *= -0.8f;
          vel.x += (random_float(frame_seed + i * 10 + 3) - 0.5f) * kick;
          vel.y += (random_float(frame_seed + i * 10 + 4) - 0.5f) * kick;
+    }
+    
+    // Obstacle Collision
+    for (int k = 0; k < num_obstacles; k++) {
+        float ox = obstacle_data[k*5 + 0];
+        float oy = obstacle_data[k*5 + 1];
+        float oz = obstacle_data[k*5 + 2];
+        float osize = obstacle_data[k*5 + 3];
+        float otype = obstacle_data[k*5 + 4];
+        
+        if (otype < 0.5f) { // Sphere
+            float dx = p_next.x - ox;
+            float dy = p_next.y - oy;
+            float dz = p_next.z - oz;
+            float dist_sq = dx*dx + dy*dy + dz*dz;
+            
+            if (dist_sq < osize*osize && dist_sq > 0.0001f) {
+                float dist = sqrt(dist_sq);
+                float nx = dx / dist;
+                float ny = dy / dist;
+                float nz = dz / dist;
+                
+                // Push out
+                p_next.x = ox + nx * (osize + 0.1f);
+                p_next.y = oy + ny * (osize + 0.1f);
+                p_next.z = oz + nz * (osize + 0.1f);
+                
+                // Reflect velocity
+                float v_dot_n = vel.x * nx + vel.y * ny + vel.z * nz;
+                vel.x -= 2.0f * v_dot_n * nx * 0.5f; // 0.5 restitution
+                vel.y -= 2.0f * v_dot_n * ny * 0.5f;
+                vel.z -= 2.0f * v_dot_n * nz * 0.5f;
+            }
+        } else { // Box
+            float half = osize * 0.5f;
+            if (fabs(p_next.x - ox) < half && fabs(p_next.y - oy) < half && fabs(p_next.z - oz) < half) {
+                float dx = fabs(p_next.x - ox);
+                float dy = fabs(p_next.y - oy);
+                float dz = fabs(p_next.z - oz);
+                
+                if (dx >= dy && dx >= dz) {
+                    if (p_next.x > ox) p_next.x = ox + half + 0.1f;
+                    else p_next.x = ox - half - 0.1f;
+                    vel.x *= -0.5f;
+                } else if (dy >= dx && dy >= dz) {
+                    if (p_next.y > oy) p_next.y = oy + half + 0.1f;
+                    else p_next.y = oy - half - 0.1f;
+                    vel.y *= -0.5f;
+                } else {
+                    if (p_next.z > oz) p_next.z = oz + half + 0.1f;
+                    else p_next.z = oz - half - 0.1f;
+                    vel.z *= -0.5f;
+                }
+            }
+        }
     }
     
     // Recycling Logic
@@ -463,6 +520,49 @@ __global__ void advect_velocity_kernel(
     new_velocity[flat_idx+2] = new_vel.z;
 }
 
+__global__ void apply_obstacles_velocity_kernel(
+    float* velocity, int res_x, int res_y, int res_z,
+    const float* obstacle_data, int num_obstacles
+) {
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    int idy = blockDim.y * blockIdx.y + threadIdx.y;
+    int idz = blockDim.z * blockIdx.z + threadIdx.z;
+    
+    if (idx >= res_x || idy >= res_y || idz >= res_z) return;
+    
+    float px = (float)idx;
+    float py = (float)idy;
+    float pz = (float)idz;
+    
+    for (int k = 0; k < num_obstacles; k++) {
+        float ox = obstacle_data[k*5 + 0];
+        float oy = obstacle_data[k*5 + 1];
+        float oz = obstacle_data[k*5 + 2];
+        float osize = obstacle_data[k*5 + 3];
+        float otype = obstacle_data[k*5 + 4];
+        
+        bool inside = false;
+        
+        if (otype < 0.5f) { // Sphere
+            float dist_sq = (px-ox)*(px-ox) + (py-oy)*(py-oy) + (pz-oz)*(pz-oz);
+            if (dist_sq < osize*osize) inside = true;
+        } else { // Box
+            float half = osize * 0.5f;
+            if (fabs(px - ox) < half && fabs(py - oy) < half && fabs(pz - oz) < half) inside = true;
+        }
+        
+        if (inside) {
+            int s_z = 3;
+            int s_y = 3 * res_z;
+            int s_x = 3 * res_z * res_y;
+            int flat = idx * s_x + idy * s_y + idz * s_z;
+            velocity[flat] = 0.0f;
+            velocity[flat+1] = 0.0f;
+            velocity[flat+2] = 0.0f;
+        }
+    }
+}
+
 }
 
 '''
@@ -479,6 +579,7 @@ class FluidSolverGPU:
         # Compile Kernels
         self.advect_particles_fn = cp.RawKernel(PARTICLE_KERNEL_SOURCE, 'advect_particles')
         self.advect_velocity_fn = cp.RawKernel(PARTICLE_KERNEL_SOURCE, 'advect_velocity_kernel')
+        self.apply_obstacles_fn = cp.RawKernel(PARTICLE_KERNEL_SOURCE, 'apply_obstacles_velocity_kernel')
         
         # Fluid fields (on GPU)
         self.velocity_gpu = cp.zeros((res_x, res_y, res_z, 3), dtype=cp.float32)
@@ -506,6 +607,7 @@ class FluidSolverGPU:
         # Obstacles
         self.max_obstacles = 10
         self.num_obstacles = 0
+        self.obstacle_data = np.zeros((self.max_obstacles, 5), dtype=np.float32) # Host side (N x 5)
         self.obstacle_data_gpu = cp.zeros(self.max_obstacles * 5, dtype=cp.float32)
         
         self.init_particles()
@@ -513,6 +615,19 @@ class FluidSolverGPU:
         self.update_params(0, 1, 10.0, 10.0, 5.0, 5.0, 10.0, 10.0, 500.0, 500.0)
         
         self.frame_count = 0
+
+
+    @property
+    def velocity(self):
+        return self.velocity_gpu.get()
+        
+    @property
+    def particle_pos(self):
+        return self.particle_pos_gpu.get().reshape(-1, 3)
+        
+    @property
+    def particle_color(self):
+        return self.particle_color_gpu.get().reshape(-1, 3)
 
     def init_particles(self):
         # Initialize randomly (flattened)
@@ -584,6 +699,26 @@ class FluidSolverGPU:
 
     def step(self):
         self.advect()
+        
+        # Sync obstacles and apply
+        if self.num_obstacles > 0:
+            self.obstacle_data_gpu.set(self.obstacle_data.ravel())
+            
+            block = (8, 8, 8)
+            grid = (
+                (self.res[0] + 7) // 8,
+                (self.res[1] + 7) // 8,
+                (self.res[2] + 7) // 8
+            )
+            self.apply_obstacles_fn(
+                grid, block,
+                (
+                    self.velocity_gpu,
+                    self.res[0], self.res[1], self.res[2],
+                    self.obstacle_data_gpu, cp.int32(self.num_obstacles)
+                )
+            )
+
         self.apply_walls()
         self.apply_inlet_boundary()
         

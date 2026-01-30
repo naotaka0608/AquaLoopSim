@@ -39,6 +39,9 @@ class AppState:
         self.particle_size = 8.0 # PyVista uses point size, not radius
         self.show_trails = False
         self.show_tank_walls = True
+        self.viz_mode = "Particles" # Particles, Streamlines, Both
+        self.streamline_radius = 0.5
+        self.streamline_count = 50
         
         # シミュレーション制御
         self.is_paused = False
@@ -114,6 +117,9 @@ class AppState:
             'outlet2_flow': self.outlet2_flow,
             'obstacles': self.obstacles,
             'compute_device': self.compute_device,
+            'viz_mode': self.viz_mode,
+            'streamline_radius': self.streamline_radius,
+            'streamline_count': self.streamline_count,
         }
     
     def from_dict(self, data):

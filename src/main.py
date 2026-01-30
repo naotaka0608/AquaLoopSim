@@ -52,6 +52,7 @@ box_mesh = None
 pipe_mesh = None
 inlet_pipe_mesh = None
 outlet_pipe_mesh = None
+velocity_grid = None # Streamlines用グリッド
 
 
 def update_box_geometry(res_x, res_y, res_z):
@@ -413,13 +414,40 @@ def _create_visualization_section():
             )
         dpg.add_spacer(height=5)
         # 表示オプション
-        dpg.add_checkbox(
-            label="流線（トレイル）表示",
-            tag="show_trails_checkbox",
-            default_value=False,
-            callback=lambda s, a: setattr(state, 'show_trails', a),
+        dpg.add_spacer(height=5)
+        # 表示オプション
+        dpg.add_text("表示モード:", indent=10)
+        dpg.add_radio_button(
+            items=["Particles", "Streamlines", "Both"],
+            tag="viz_mode_radio",
+            default_value=state.viz_mode,
+            horizontal=True,
+            callback=lambda s, a: setattr(state, 'viz_mode', a),
             indent=10
         )
+        
+        # Streamline Settings (Conditional visibility handled in loop or just show always)
+        with dpg.group(tag="streamline_settings_group"): 
+            dpg.add_text("流線設定", indent=10)
+            dpg.add_slider_float(
+                label="チューブ半径",
+                default_value=state.streamline_radius,
+                min_value=0.1,
+                max_value=5.0,
+                width=150,
+                callback=lambda s, a: setattr(state, 'streamline_radius', a),
+                indent=20
+            )
+            dpg.add_slider_int(
+                label="流線数",
+                default_value=state.streamline_count,
+                min_value=10,
+                max_value=500,
+                width=150,
+                callback=lambda s, a: setattr(state, 'streamline_count', a),
+                indent=20
+            )
+            
         dpg.add_checkbox(
             label="水槽の壁面表示",
             tag="show_tank_checkbox",
@@ -588,6 +616,61 @@ def _create_analysis_section():
         dpg.add_text("Save to: ./screenshots", tag="save_path_text")
         dpg.add_text("Frames: 0", tag="frame_count_text")
         dpg.add_spacer(height=10)
+
+
+
+
+def update_streamlines(plotter, solver, res_x, res_y, res_z):
+    """流線（Streamlines）を生成・更新"""
+    global velocity_grid
+    
+    # グリッド初期化（初回または解像度変更時）
+    if velocity_grid is None or velocity_grid.dimensions != [res_x, res_y, res_z]:
+        velocity_grid = pv.ImageData(
+            dimensions=(res_x, res_y, res_z),
+            spacing=(1, 1, 1),
+            origin=(0, 0, 0)
+        )
+    
+    # 速度データ更新
+    vel = solver.velocity
+    # VTK/PyVistaはX軸が最も早く変化する(Fortran-like in 3D semantics)が、
+    # Numpy C-orderは最後の軸(Z)が最も早い。
+    # したがって、(x, y, z, 3) -> (z, y, x, 3) に転置してから C-order で平坦化すると
+    # (x0,y0,z0), (x1,y0,z0)... の順になりVTKと整合する。
+    velocity_grid.point_data["vectors"] = vel.transpose(2, 1, 0, 3).reshape(-1, 3, order='C')
+    velocity_grid.set_active_vectors("vectors")
+    
+    # Inlet位置にシードを設定
+    # stateからインレット情報を取得
+    inlet_y = state.inlet_y_mm / SCALE
+    inlet_z = state.inlet_z_mm / SCALE
+    inlet_r = state.inlet_radius_mm / SCALE
+    
+    center = [0, 0, 0]
+    if state.inlet_face == 0: # Left X-
+        center = [2.0, inlet_y, inlet_z] # 少し内側から開始
+    elif state.inlet_face == 1: # Right X+
+        center = [res_x - 2.0, inlet_y, inlet_z]
+    elif state.inlet_face == 2: # Bottom Y-
+        center = [inlet_y, 2.0, inlet_z] 
+    elif state.inlet_face == 3: # Top Y+
+        center = [inlet_y, res_y - 2.0, inlet_z]
+        
+    streamlines = velocity_grid.streamlines(
+        n_points=state.streamline_count,
+        source_radius=inlet_r,
+        source_center=center,
+        max_time=2000.0,
+        integration_direction='forward' # インレットから前方へ
+    )
+    
+    if streamlines.n_points > 0:
+        tubes = streamlines.tube(radius=state.streamline_radius)
+        # 流速の大きさで色付け
+        plotter.add_mesh(tubes, name="streamlines", scalars="vectors", opacity=0.8, render_lines_as_tubes=False)
+    else:
+        plotter.remove_actor("streamlines")
 
 
 def setup_dpg_ui():
@@ -1005,8 +1088,24 @@ def main():
                 state.sim_elapsed_time += (1.0 / 60.0) * state.sim_speed
             
             # PyVistaメッシュ更新 (インプレース更新で高速化)
-            particles_mesh.points[:] = solver.particle_pos
-            particles_mesh.point_data["rgb"][:] = solver.particle_color
+            if state.viz_mode == "Particles" or state.viz_mode == "Both":
+                if particles_actor:
+                    particles_actor.SetVisibility(True)
+                particles_mesh.points[:] = solver.particle_pos
+                particles_mesh.point_data["rgb"][:] = solver.particle_color
+            else:
+                 if particles_actor:
+                    particles_actor.SetVisibility(False)
+            
+            # Streamlines Update
+            if state.viz_mode == "Streamlines" or state.viz_mode == "Both":
+                # Only update every X frames to save performance? No, user wants realtime.
+                try:
+                    update_streamlines(plotter, solver, res_x, res_y, res_z)
+                except Exception as e:
+                    print(f"Streamline error: {e}")
+            else:
+                plotter.remove_actor("streamlines")
             
             # 断面ビュー更新
             if particles_actor:
