@@ -1,13 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('src/config.py', 'src')]
+datas = [('src/config.py', 'src'), ('config.json', '.')]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('pyvista')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('dearpygui')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+try:
+    tmp_ret = collect_all('cupy')
+    datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+except:
+    pass
 
 
 a = Analysis(
