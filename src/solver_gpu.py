@@ -170,6 +170,7 @@ __global__ void advect_particles(
     float inlet_y, float inlet_z, float inlet_radius, float inlet_velocity,
     float outlet_y, float outlet_z, float outlet_radius, float outlet_velocity,
     int num_particles, int trail_length, int colormap_mode,
+    const float* obstacle_data, int num_obstacles,
     unsigned int frame_seed
 ) {
     int i = blockDim.x * blockIdx.x + threadIdx.x;
