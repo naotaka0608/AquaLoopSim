@@ -30,6 +30,8 @@ class AppState:
         self.needs_particle_count_update = False
         self.needs_device_update = False
         
+        self.low_load_mode = False
+        
         # GPU Settings
         self.compute_device = "CPU"
         
@@ -42,6 +44,7 @@ class AppState:
         self.viz_mode = "Particles" # Particles, Streamlines, Both
         self.streamline_radius = 0.5
         self.streamline_count = 50
+        self.divergence_iterations = 50
         
         # シミュレーション制御
         self.is_paused = False
@@ -81,6 +84,22 @@ class AppState:
         
         # シミュレーション経過時間
         self.sim_elapsed_time = 0.0
+    
+    def apply_low_load_mode(self):
+        """低負荷モードのプリセットを適用"""
+        if self.low_load_mode:
+            self.target_num_particles = 10000
+            self.divergence_iterations = 10
+            self.viz_mode = "Particles"
+            self.show_trails = False
+            self.particle_size = 4.0
+            self.needs_particle_count_update = True
+        else:
+            # デフォルトに戻す
+            self.target_num_particles = DEFAULT_NUM_PARTICLES
+            self.divergence_iterations = 50
+            self.particle_size = 8.0
+            self.needs_particle_count_update = True
     
     def to_dict(self):
         """保存用の辞書に変換"""

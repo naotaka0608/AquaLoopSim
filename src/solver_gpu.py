@@ -155,16 +155,21 @@ __device__ void apply_colormap_gpu(float t, int mode, float* r, float* g, float*
             float s = (t - 0.5f) * 2.0f;
             *r = 1.0f; *g = 1.0f - s; *b = 1.0f - s;
         }
-    } else if (mode == 3) { // Viridis-like
-        *r = 0.267f + t * 0.6f;
-        *g = 0.004f + t * 0.87f;
         *b = 0.329f + t * 0.3f - t * t * 0.5f;
+    } else if (mode == 4) { // Residence Time
+        if (t < 0.5f) {
+            float s = t * 2.0f;
+            *r = s; *g = 1.0f; *b = 0.0f;
+        } else {
+            float s = (t - 0.5f) * 2.0f;
+            *r = 1.0f; *g = 1.0f - s; *b = 0.0f;
+        }
     }
 }
 
 __global__ void advect_particles(
     float* pos_arr, float* vel_arr, float* color_arr, int* absorbed_arr, 
-    float* trail_pos_arr, int* trail_idx_arr,
+    float* life_arr, float* trail_pos_arr, int* trail_idx_arr,
     const float* velocity, int res_x, int res_y, int res_z, float dt,
     int inlet_face, int outlet_face,
     float inlet_y, float inlet_z, float inlet_radius, float inlet_velocity,
@@ -213,7 +218,7 @@ __global__ void advect_particles(
         float jet_range = max_dim * 0.3f;
         
         if (dist_in < jet_range && dist_in > 0.1f) {
-            float strength = inlet_velocity * 0.03f * (1.0f - dist_in/jet_range);
+            float strength = inlet_velocity * 0.1f * (1.0f - dist_in/jet_range);
             vel.x += (to_inlet_vec.x/dist_in) * strength;
             vel.y += (to_inlet_vec.y/dist_in) * strength;
             vel.z += (to_inlet_vec.z/dist_in) * strength;
@@ -232,6 +237,9 @@ __global__ void advect_particles(
     vel_arr[i*3] = vel.x;
     vel_arr[i*3+1] = vel.y;
     vel_arr[i*3+2] = vel.z;
+    
+    // Residence time increment
+    life_arr[i] += dt;
     
     float3 p_next;
     p_next.x = pos.x + vel.x * dt;
@@ -400,11 +408,12 @@ __global__ void advect_particles(
             p_next.z = inlet_z + v;
         }
         
-        // Reset velocity
+        // Reset velocity and life
         vel.x = 0.0f; vel.y = 0.0f; vel.z = 0.0f;
         vel_arr[i*3] = 0.0f;
         vel_arr[i*3+1] = 0.0f;
         vel_arr[i*3+2] = 0.0f;
+        life_arr[i] = 0.0f;
         
         // Mark as Recycled (Tracer) and turn Pink
         absorbed_arr[i] = 2; 
@@ -457,9 +466,14 @@ __global__ void advect_particles(
                 r = 0.0f; g = 1.0f; b = 0.5f; // Cyan
             }
         } else {
-            float speed = sqrt(vel.x*vel.x + vel.y*vel.y + vel.z*vel.z);
-            float max_v = (inlet_velocity < 50.0f) ? 50.0f : inlet_velocity;
-            float t = speed / max_v;
+            float t;
+            if (colormap_mode == 4) {
+                t = life_arr[i] / 60.0f; // 60s threshold
+            } else {
+                float speed = sqrt(vel.x*vel.x + vel.y*vel.y + vel.z*vel.z);
+                float max_v = (inlet_velocity < 50.0f) ? 50.0f : inlet_velocity;
+                t = speed / max_v;
+            }
             if (t > 1.0f) t = 1.0f;
             if (should_recycle) t = 0.0f; 
             
@@ -589,6 +603,9 @@ class FluidSolverGPU:
         self.new_pressure_gpu = cp.zeros((res_x, res_y, res_z), dtype=cp.float32)
         self.divergence_gpu = cp.zeros((res_x, res_y, res_z), dtype=cp.float32)
         
+        # Colormap
+        self.colormap_mode = 0
+        
         # Particles (on GPU)
         self.num_particles = num_particles
         self.particle_pos_gpu = cp.zeros(num_particles * 3, dtype=cp.float32) # Flattened for easier CUDA access
@@ -698,7 +715,14 @@ class FluidSolverGPU:
     def particle_absorbed(self):
         return cp.asnumpy(self.particle_absorbed_gpu)
 
-    def step(self):
+    @property
+    def particle_life(self):
+        return cp.asnumpy(self.particle_life_gpu)
+
+    def step(self, iterations=None):
+        if iterations is None:
+            iterations = DIVERGENCE_ITERATIONS
+            
         self.advect()
         
         # Sync obstacles and apply
@@ -724,7 +748,7 @@ class FluidSolverGPU:
         self.apply_inlet_boundary()
         
         self.divergence_calc()
-        for _ in range(DIVERGENCE_ITERATIONS):
+        for _ in range(iterations):
             self.pressure_jacobi()
         self.project()
         
@@ -935,14 +959,14 @@ class FluidSolverGPU:
             grid_dim, block_dim,
             (
                 self.particle_pos_gpu, self.particle_vel_gpu, self.particle_color_gpu, self.particle_absorbed_gpu,
-                self.trail_positions_gpu, self.trail_index_gpu,
+                self.particle_life_gpu, self.trail_positions_gpu, self.trail_index_gpu,
                 self.velocity_gpu, 
                 self.res[0], self.res[1], self.res[2], cp.float32(self.dt),
-                self.inlet_face, self.outlet_face,
+                cp.int32(self.inlet_face), cp.int32(self.outlet_face),
                 cp.float32(self.inlet_y), cp.float32(self.inlet_z), cp.float32(self.inlet_radius), cp.float32(self.inlet_velocity),
                 cp.float32(self.outlet_y), cp.float32(self.outlet_z), cp.float32(self.outlet_radius), cp.float32(self.outlet_velocity),
-                self.num_particles, self.trail_length, self.colormap_mode,
-                self.obstacle_data_gpu, self.num_obstacles,
+                cp.int32(self.num_particles), cp.int32(self.trail_length), cp.int32(self.colormap_mode),
+                self.obstacle_data_gpu, cp.int32(self.num_obstacles),
                 cp.uint32(self.frame_count)
             )
         )

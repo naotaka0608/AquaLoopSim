@@ -248,7 +248,7 @@ def create_labeled_slider_with_input(label, tag_base, default_val, min_val, max_
     slider_tag = f"{tag_base}_slider"
     input_tag = f"{tag_base}_input"
     
-    dpg.add_text(label)
+    dpg.add_text(label, tag=f"{tag_base}_label")
     with dpg.group(horizontal=True):
         dpg.add_slider_float(
             tag=slider_tag,
@@ -286,14 +286,38 @@ def _create_tank_section():
     dpg.add_separator()
 
 
+def update_port_ui_limits(tag_base, face_index):
+    """配置面に応じてUIのラベルと制限を動的に変更"""
+    is_vertical = (face_index >= 2) # Bottom/Top
+    
+    label_tag = f"{tag_base}_label"
+    slider_tag = f"{tag_base}_slider"
+    
+    if is_vertical:
+        # Bottom/Top -> X-Z plane. First coordinate is X.
+        dpg.configure_item(label_tag, default_value="X位置 (mm)")
+        dpg.configure_item(slider_tag, max_value=state.tank_width - 20.0)
+    else:
+        # Left/Right -> Y-Z plane. First coordinate is Y.
+        dpg.configure_item(label_tag, default_value="Y位置 (mm)")
+        dpg.configure_item(slider_tag, max_value=state.tank_height - 20.0)
+
 def _create_inlet_section():
     """流入口セクション"""
     faces = ["0:左(X-)", "1:右(X+)", "2:底(Y-)", "3:上(Y+)"]
     with dpg.collapsing_header(label="流入口 (Inlet)", default_open=False):
         dpg.add_spacer(height=5)
         dpg.add_text("設置面")
-        dpg.add_combo(items=faces, tag="inlet_face_combo", default_value=faces[state.inlet_face],
-                     callback=lambda s, a: setattr(state, 'inlet_face', faces.index(a)), width=200)
+        dpg.add_combo(
+            items=faces, 
+            tag="inlet_face_combo", 
+            default_value=faces[state.inlet_face],
+            callback=lambda s, a: (
+                setattr(state, 'inlet_face', faces.index(a)),
+                update_port_ui_limits("inlet_y", faces.index(a))
+            ), 
+            width=200
+        )
         dpg.add_spacer(height=5)
         create_labeled_slider_with_input("Y位置 (mm)", "inlet_y", state.inlet_y_mm, 20.0, 450.0)
         create_labeled_slider_with_input("Z位置 (mm)", "inlet_z", state.inlet_z_mm, 20.0, 980.0)
@@ -309,8 +333,16 @@ def _create_outlet_section():
     with dpg.collapsing_header(label="流出口 (Outlet)", default_open=False):
         dpg.add_spacer(height=5)
         dpg.add_text("設置面")
-        dpg.add_combo(items=faces, tag="outlet_face_combo", default_value=faces[state.outlet_face],
-                     callback=lambda s, a: setattr(state, 'outlet_face', faces.index(a)), width=200)
+        dpg.add_combo(
+            items=faces, 
+            tag="outlet_face_combo", 
+            default_value=faces[state.outlet_face],
+            callback=lambda s, a: (
+                setattr(state, 'outlet_face', faces.index(a)),
+                update_port_ui_limits("outlet_y", faces.index(a))
+            ), 
+            width=200
+        )
         dpg.add_spacer(height=5)
         dpg.add_checkbox(label="流入口と同期", tag="sync_checkbox", default_value=state.is_sync, callback=lambda: update_state_from_ui())
         dpg.add_spacer(height=5)
@@ -381,11 +413,11 @@ def _create_visualization_section():
         # カラーマップ選択
         dpg.add_text("カラーマップ", indent=10)
         dpg.add_radio_button(
-            items=["青→赤", "レインボー", "クールウォーム", "Viridis"],
+            items=["青→赤", "レインボー", "クールウォーム", "Viridis", "滞留時間"],
             tag="colormap_radio",
             default_value="青→赤",
             horizontal=True,
-            callback=lambda s, a: setattr(state, 'colormap_mode', ["青→赤", "レインボー", "クールウォーム", "Viridis"].index(a)),
+            callback=lambda s, a: setattr(state, 'colormap_mode', ["青→赤", "レインボー", "クールウォーム", "Viridis", "滞留時間"].index(a)),
             indent=10
         )
         dpg.add_spacer(height=5)
@@ -423,6 +455,14 @@ def _create_visualization_section():
             default_value=state.viz_mode,
             horizontal=True,
             callback=lambda s, a: setattr(state, 'viz_mode', a),
+            indent=10
+        )
+        
+        dpg.add_checkbox(
+            label="粒子の軌跡を表示",
+            tag="show_trails_checkbox",
+            default_value=state.show_trails,
+            callback=lambda s, a: setattr(state, 'show_trails', a),
             indent=10
         )
         
@@ -472,14 +512,27 @@ def _create_simulation_control_section():
             dpg.add_button(label="Reset", callback=on_reset_particles, width=100)
         
         dpg.add_spacer(height=5)
+        dpg.add_checkbox(
+            label="低負荷モード (Low Load Mode)", 
+            tag="low_load_checkbox", 
+            default_value=state.low_load_mode,
+            callback=lambda s, a: (
+                setattr(state, 'low_load_mode', a), 
+                state.apply_low_load_mode(),
+                dpg.set_value("particle_slider", state.target_num_particles),
+                dpg.set_value("viz_mode_radio", state.viz_mode),
+                dpg.set_value("show_trails_checkbox", state.show_trails)
+            )
+        )
+        dpg.add_text("※ 粒子数を減らし、重い視覚化を無効化します", color=(200, 200, 200))
         # シミュレーション速度
         dpg.add_text("シミュレーション速度", indent=10)
         dpg.add_radio_button(
-            items=["0.25x", "0.5x", "1x", "2x", "4x"],
+            items=["0.25x", "0.5x", "1x", "2x", "4x", "8x", "10x", "20x"],
             tag="speed_radio",
             default_value="1x",
             horizontal=True,
-            callback=lambda s, a: setattr(state, 'sim_speed', {"0.25x": 0.25, "0.5x": 0.5, "1x": 1.0, "2x": 2.0, "4x": 4.0}[a]),
+            callback=lambda s, a: setattr(state, 'sim_speed', {"0.25x": 0.25, "0.5x": 0.5, "1x": 1.0, "2x": 2.0, "4x": 4.0, "8x": 8.0, "10x": 10.0, "20x": 20.0}[a]),
             indent=10
         )
         dpg.add_spacer(height=5)
@@ -574,9 +627,10 @@ def _create_analysis_section():
             callback=lambda s, a: setattr(state, 'show_flow_meter', a),
             indent=10
         )
-        dpg.add_text("流入口: 0 粒子/秒", tag="inlet_flow_text", indent=10)
-        dpg.add_text("流出口: 0 粒子/秒", tag="outlet_flow_text", indent=10)
+        dpg.add_text("流入口: 0 粒子", tag="inlet_flow_text", indent=10)
+        dpg.add_text("流出口: 0 粒子", tag="outlet_flow_text", indent=10)
         dpg.add_text("平均速度: 0.0 mm/s", tag="avg_speed_text", indent=10)
+        dpg.add_text("平均滞留時間: 0.0 秒", tag="avg_residence_text", indent=10)
         dpg.add_spacer(height=10)
         dpg.add_separator()
         # 断面ビュー
@@ -726,6 +780,10 @@ def setup_dpg_ui():
         _create_additional_ports_section()
         _create_obstacles_section()
         _create_analysis_section()
+        
+        # 初期状態に合わせてUIラベル・制限を更新
+        update_port_ui_limits("inlet_y", state.inlet_face)
+        update_port_ui_limits("outlet_y", state.outlet_face)
     
     dpg.create_viewport(title='Fluid Simulation', width=520, height=1050, x_pos=50, y_pos=10)
     dpg.setup_dearpygui()
@@ -826,27 +884,31 @@ def save_recording_frame():
 
 
 def calculate_flow_stats(solver, res_x, res_y, res_z, 
-                         inlet_y, inlet_z, inlet_r,
-                         outlet_y, outlet_z, outlet_r):
+                         inlet_face, inlet_y, inlet_z, inlet_r,
+                         outlet_face, outlet_y, outlet_z, outlet_r):
     """流量統計を計算"""
     positions = solver.particle_pos
     velocities = solver.particle_vel
     
-    # X座標チェック (壁際)
-    x_mask = positions[:, 0] < 5.0
-    
-    # YZ距離の二乗計算
-    # Inlet
-    dy_in = positions[:, 1] - inlet_y
-    dz_in = positions[:, 2] - inlet_z
-    dist_sq_in = dy_in*dy_in + dz_in*dz_in
-    inlet_mask = np.logical_and(x_mask, dist_sq_in < (inlet_r * inlet_r))
-    
-    # Outlet
-    dy_out = positions[:, 1] - outlet_y
-    dz_out = positions[:, 2] - outlet_z
-    dist_sq_out = dy_out*dy_out + dz_out*dz_out
-    outlet_mask = np.logical_and(x_mask, dist_sq_out < (outlet_r * outlet_r))
+    # Helper to check if a point is near a hole on a specific face
+    def check_face_mask(pos, face, fy, fz, fr, res):
+        margin = 5.0
+        if face == 0:  # Left (X-)
+            face_mask = pos[:, 0] < margin
+            dist_sq = (pos[:, 1] - fy)**2 + (pos[:, 2] - fz)**2
+        elif face == 1:  # Right (X+)
+            face_mask = pos[:, 0] > res[0] - margin
+            dist_sq = (pos[:, 1] - fy)**2 + (pos[:, 2] - fz)**2
+        elif face == 2:  # Bottom (Y-)
+            face_mask = pos[:, 1] < margin
+            dist_sq = (pos[:, 0] - fy)**2 + (pos[:, 2] - fz)**2
+        else:  # Top (Y+)
+            face_mask = pos[:, 1] > res[1] - margin
+            dist_sq = (pos[:, 0] - fy)**2 + (pos[:, 2] - fz)**2
+        return np.logical_and(face_mask, dist_sq < (fr * fr))
+
+    inlet_mask = check_face_mask(positions, inlet_face, inlet_y, inlet_z, inlet_r, [res_x, res_y, res_z])
+    outlet_mask = check_face_mask(positions, outlet_face, outlet_y, outlet_z, outlet_r, [res_x, res_y, res_z])
     
     inlet_count = np.sum(inlet_mask)
     outlet_count = np.sum(outlet_mask)
@@ -855,7 +917,10 @@ def calculate_flow_stats(solver, res_x, res_y, res_z,
     speeds = np.linalg.norm(velocities, axis=1)
     avg_speed = np.mean(speeds) * SCALE  # mm/s に変換
     
-    return inlet_count, outlet_count, avg_speed
+    # 平均滞留時間 (solver.particle_life が経過秒数として使われていると仮定)
+    avg_residence = np.mean(solver.particle_life)
+    
+    return inlet_count, outlet_count, avg_speed, avg_residence
 
 def main():
     # DearPyGui UIをセットアップ
@@ -1084,7 +1149,7 @@ def main():
             if not state.is_paused:
                 steps_per_frame = max(1, int(state.sim_speed))
                 for _ in range(steps_per_frame):
-                    solver.step()
+                    solver.step(iterations=state.divergence_iterations)
                 state.sim_elapsed_time += (1.0 / 60.0) * state.sim_speed
             
             # PyVistaメッシュ更新 (インプレース更新で高速化)
@@ -1157,15 +1222,16 @@ def main():
             flow_update_counter += 1
             if state.show_flow_meter and flow_update_counter >= 10:
                 flow_update_counter = 0
-                inlet_count, outlet_count, avg_speed = calculate_flow_stats(
+                inlet_count, outlet_count, avg_speed, avg_residence = calculate_flow_stats(
                     solver, res_x, res_y, res_z,
-                    state.inlet_y_mm/SCALE, state.inlet_z_mm/SCALE, state.inlet_radius_mm/SCALE,
-                    state.outlet_y_mm/SCALE, state.outlet_z_mm/SCALE, state.outlet_radius_mm/SCALE
+                    state.inlet_face, state.inlet_y_mm/SCALE, state.inlet_z_mm/SCALE, state.inlet_radius_mm/SCALE,
+                    state.outlet_face, state.outlet_y_mm/SCALE, state.outlet_z_mm/SCALE, state.outlet_radius_mm/SCALE
                 )
                 try:
                      dpg.set_value("inlet_flow_text", f"流入口: {inlet_count} 粒子")
                      dpg.set_value("outlet_flow_text", f"流出口: {outlet_count} 粒子")
                      dpg.set_value("avg_speed_text", f"平均速度: {avg_speed:.1f} mm/s")
+                     dpg.set_value("avg_residence_text", f"平均滞留時間: {avg_residence:.1f} 秒")
                 except:
                      pass
             

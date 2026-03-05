@@ -31,7 +31,7 @@
   "outlet2_flow": 300.0,
   "obstacles": [],
   "compute_device": "GPU",
-  "viz_mode": "Streamlines",
+  "viz_mode": "Particles",
   "streamline_radius": 0.10000000149011612,
   "streamline_count": 112
 }

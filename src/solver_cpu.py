@@ -40,6 +40,16 @@ def apply_colormap(t, mode):
         r = 0.267 + t * 0.6
         g = 0.004 + t * 0.87
         b = 0.329 + t * 0.3 - t * t * 0.5
+    elif mode == 4:  # Residence Time (Green -> Yellow -> Red)
+        # t here represents time relative to a "long stay" threshold, e.g. 30 seconds
+        if t < 0.5:
+            # Green to Yellow
+            s = t * 2.0
+            r, g, b = s, 1.0, 0.0
+        else:
+            # Yellow to Red
+            s = (t - 0.5) * 2.0
+            r, g, b = 1.0, 1.0 - s, 0.0
     
     return r, g, b
 
@@ -413,7 +423,7 @@ def advect_particles_kernel(particle_pos, particle_vel, particle_color, particle
             
             jet_range = max(res[0], res[1]) * 0.3
             if dist_to_inlet < jet_range and dist_to_inlet > 0.1:
-                jet_boost = inlet_velocity * 0.03 * (1.0 - dist_to_inlet / jet_range)
+                jet_boost = inlet_velocity * 0.1 * (1.0 - dist_to_inlet / jet_range)
                 # Apply boost in direction away from inlet
                 if dist_to_inlet > 0.1:
                     vel = vel + (to_inlet / dist_to_inlet) * jet_boost
@@ -425,9 +435,10 @@ def advect_particles_kernel(particle_pos, particle_vel, particle_color, particle
                 vel[1] += (np.random.random() - 0.5) * 5.0
                 vel[2] += (np.random.random() - 0.5) * 5.0
         
-        particle_vel[i, 0] = vel[0]
-        particle_vel[i, 1] = vel[1]
         particle_vel[i, 2] = vel[2]
+        
+        # Residence time increment
+        particle_life[i] += dt
         
         p_next = pos + vel * dt
         
@@ -484,10 +495,11 @@ def advect_particles_kernel(particle_pos, particle_vel, particle_color, particle
                 p_next[1] = res[1] + 19.0
                 p_next[2] = inlet_z + v
                 
-            # Reset velocity
+            # Reset velocity and life
             vel[0] = 0.0
             vel[1] = 0.0
             vel[2] = 0.0
+            particle_life[i] = 0.0
             
         margin = 2.0
         kick = 20.0
@@ -689,10 +701,15 @@ def advect_particles_kernel(particle_pos, particle_vel, particle_color, particle
                     particle_color[i, 1] = 1.0
                     particle_color[i, 2] = 0.5
             else:
-                speed = np.sqrt(vel[0]**2 + vel[1]**2 + vel[2]**2)
-                max_v = max(50.0, inlet_velocity)
-                t = min(speed / max_v, 1.0)
-                r, g, b = apply_colormap(t, colormap_mode)
+                if colormap_mode == 4:
+                    # Residence Time colormap: 0 to 60 seconds
+                    t_res = min(particle_life[i] / 60.0, 1.0)
+                    r, g, b = apply_colormap(t_res, colormap_mode)
+                else:
+                    speed = np.sqrt(vel[0]**2 + vel[1]**2 + vel[2]**2)
+                    max_v = max(50.0, inlet_velocity)
+                    t = min(speed / max_v, 1.0)
+                    r, g, b = apply_colormap(t, colormap_mode)
                 particle_color[i, 0] = r
                 particle_color[i, 1] = g
                 particle_color[i, 2] = b
@@ -827,13 +844,13 @@ class FluidSolverCPU:
                                self.num_particles, self.trail_length, self.colormap_mode,
                                self.obstacle_data, self.num_obstacles)
     
-    def step(self):
+    def step(self, iterations=DIVERGENCE_ITERATIONS):
         self.apply_inlet_boundary()
         self.advect()
         self.apply_walls()
         
         self.divergence_calc()
-        for _ in range(DIVERGENCE_ITERATIONS):
+        for _ in range(iterations):
             self.pressure_jacobi()
         
         self.project()
