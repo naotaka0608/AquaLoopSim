@@ -1003,6 +1003,14 @@ def main():
     # 非ブロッキングで表示
     plotter.show(interactive_update=True, auto_close=False)
     
+    # ウィンドウが閉じられたときに連動して終了させる設定
+    try:
+        plotter.iren.add_observer("ExitEvent", lambda obj, event: dpg.stop_dearpygui())
+        # qキーなどでも連動して終了できるよう設定
+        plotter.add_key_event("q", lambda: dpg.stop_dearpygui())
+    except Exception as e:
+        print(f"Failed to bind exit events: {e}")
+    
     # グローバル参照を設定（スクリーンショット用）
     global _window_ref
     _window_ref = plotter
@@ -1020,11 +1028,18 @@ def main():
     # メインループ
     try:
         while not getattr(plotter, 'closed', getattr(plotter, '_closed', False)) and dpg.is_dearpygui_running():
+            # PyVistaインターフェースが死んでいる場合は連動終了
+            if plotter.iren is None or getattr(plotter.iren, '_has_closed', False) or getattr(plotter, 'render_window', None) is None:
+                break
+            
             # DearPyGuiのフレームを処理
             dpg.render_dearpygui_frame()
             
             # PyVistaのイベント処理（描画更新含む）
-            plotter.update()
+            try:
+                plotter.update()
+            except Exception:
+                pass
 
             # 背景色の更新反映
             if state.background_color_mode != last_background_mode:
@@ -1205,7 +1220,11 @@ def main():
                      particles_actor.mapper.RemoveAllClippingPlanes()
 
             # 強制再描画
-            plotter.render()
+            try:
+                if not getattr(plotter, 'closed', False) and plotter.render_window is not None:
+                    plotter.render()
+            except Exception:
+                break
         
             # 経過時間表示更新
             try:
