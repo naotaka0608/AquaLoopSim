@@ -222,22 +222,52 @@ def on_load_config():
     if load_config():
         # UIを更新
         try:
-            dpg.set_value("tank_width_slider", state.tank_width)
-            dpg.set_value("tank_height_slider", state.tank_height)
-            dpg.set_value("tank_depth_slider", state.tank_depth)
-            dpg.set_value("inlet_y_slider", state.inlet_y_mm)
-            dpg.set_value("inlet_z_slider", state.inlet_z_mm)
-            dpg.set_value("inlet_radius_slider", state.inlet_radius_mm)
-            dpg.set_value("inlet_flow_slider", state.inlet_flow)
-            dpg.set_value("outlet_y_slider", state.outlet_y_mm)
-            dpg.set_value("outlet_z_slider", state.outlet_z_mm)
-            dpg.set_value("outlet_radius_slider", state.outlet_radius_mm)
-            dpg.set_value("outlet_flow_slider", state.outlet_flow)
+            faces = ["0:左(X-)", "1:右(X+)", "2:底(Y-)", "3:上(Y+)"]
+            dpg.set_value("inlet_face_combo", faces[state.inlet_face])
+            dpg.set_value("outlet_face_combo", faces[state.outlet_face])
+            
+            update_port_ui_limits("inlet_y", state.inlet_face)
+            update_port_ui_limits("outlet_y", state.outlet_face)
+            
+            for param, val in [
+                ("tank_width", state.tank_width), ("tank_height", state.tank_height), ("tank_depth", state.tank_depth),
+                ("inlet_y", state.inlet_y_mm), ("inlet_z", state.inlet_z_mm),
+                ("inlet_radius", state.inlet_radius_mm), ("inlet_flow", state.inlet_flow),
+                ("outlet_y", state.outlet_y_mm), ("outlet_z", state.outlet_z_mm),
+                ("outlet_radius", state.outlet_radius_mm), ("outlet_flow", state.outlet_flow)
+            ]:
+                dpg.set_value(f"{param}_slider", val)
+                dpg.set_value(f"{param}_input", val)
+                
             dpg.set_value("sync_checkbox", state.is_sync)
             dpg.set_value("particle_slider", state.target_num_particles)
+            dpg.set_value("particle_input", state.target_num_particles)
             dpg.set_value("particle_size_slider", state.particle_size)
             dpg.set_value("show_tank_checkbox", state.show_tank_walls)
+            
+            # 追加設定項目もロード
+            dpg.set_value("colormap_radio", ["青→赤", "レインボー", "クールウォーム", "Viridis", "滞留時間"][state.colormap_mode])
+            dpg.set_value("background_color_combo", state.background_color_mode)
+            dpg.set_value("viz_mode_radio", state.viz_mode)
+            dpg.set_value("low_load_checkbox", state.low_load_mode)
+            
+            # 追加ポート
+            dpg.set_value("use_inlet2_checkbox", state.use_second_inlet)
+            dpg.set_value("use_outlet2_checkbox", state.use_second_outlet)
+            
+            for param, val in [
+                ("inlet2_y", state.inlet2_y_mm), ("inlet2_z", state.inlet2_z_mm),
+                ("inlet2_radius", state.inlet2_radius_mm), ("inlet2_flow", state.inlet2_flow),
+                ("outlet2_y", state.outlet2_y_mm), ("outlet2_z", state.outlet2_z_mm),
+                ("outlet2_radius", state.outlet2_radius_mm), ("outlet2_flow", state.outlet2_flow)
+            ]:
+                dpg.set_value(f"{param}_slider", val)
+                dpg.set_value(f"{param}_input", val)
+            
             dpg.set_value("config_status_text", "✓ 設定を読み込みました")
+            
+            # 寸法などの更新を促す
+            state.needs_dimension_update = True
         except Exception as e:
             print(f"UI更新エラー: {e}")
     else:
